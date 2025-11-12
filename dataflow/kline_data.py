@@ -13,8 +13,7 @@ import logging
 from .config import DATA_SOURCES
 from .utils import (
     format_date, validate_stock_code, async_request, 
-    clean_dataframe, calculate_technical_indicators,
-    tushare_limiter, DataFlowException
+    clean_dataframe, tushare_limiter, DataFlowException
 )
 
 logger = logging.getLogger(__name__)
@@ -47,21 +46,39 @@ class KLineDataFetcher:
         ts_code: str,
         start_date: str,
         end_date: str,
-        adj: str = 'qfq',
-        with_indicators: bool = True
+        adj: str = 'qfq'
     ) -> pd.DataFrame:
         """
-        获取日线行情数据
+        获取股票日线行情数据
         
         Args:
-            ts_code: 股票代码 (如: 000001.SZ)
-            start_date: 开始日期 (YYYYMMDD 或 YYYY-MM-DD)
-            end_date: 结束日期 (YYYYMMDD 或 YYYY-MM-DD)
+            ts_code: 股票代码，支持多个股票同时提取，逗号分隔 (如: 000001.SZ 或 000001.SZ,600000.SH)
+            start_date: 开始日期，格式为 YYYYMMDD 或 YYYY-MM-DD (如: 20180701)
+            end_date: 结束日期，格式为 YYYYMMDD 或 YYYY-MM-DD (如: 20180718)
             adj: 复权类型 ('qfq':前复权, 'hfq':后复权, None:不复权)
-            with_indicators: 是否计算技术指标
         
         Returns:
-            日线数据DataFrame
+            pd.DataFrame: 包含以下字段的日线行情数据
+                - ts_code (str): 股票代码
+                - trade_date (str): 交易日期
+                - open (float): 开盘价
+                - high (float): 最高价
+                - low (float): 最低价
+                - close (float): 收盘价
+                - pre_close (float): 昨收价【除权价，前复权】
+                - change (float): 涨跌额
+                - pct_chg (float): 涨跌幅【基于除权后的昨收计算：（今收-除权昨收）/除权昨收】
+                - vol (float): 成交量（手）
+                - amount (float): 成交额（千元）
+                - adj_factor (float): 复权因子（如果启用复权）
+        
+        Raises:
+            DataFlowException: 当 Tushare 未配置、股票代码无效或数据获取失败时
+        
+        Note:
+            - 本接口是未复权行情，停牌期间不提供数据
+            - 交易日每天15点～16点之间入库
+            - 基础积分每分钟内可调取500次，每次6000条数据
         """
         if not self.tushare_enabled:
             raise DataFlowException("Tushare未配置或未启用")
@@ -129,10 +146,6 @@ class KLineDataFetcher:
             # 按日期排序
             df = df.sort_values('trade_date').reset_index(drop=True)
             
-            # 计算技术指标
-            if with_indicators:
-                df = calculate_technical_indicators(df)
-            
             logger.info(f"成功获取 {len(df)} 条日线数据")
             return df
             
@@ -145,21 +158,33 @@ class KLineDataFetcher:
         ts_code: str,
         start_date: str,
         end_date: str,
-        adj: str = 'qfq',
-        with_indicators: bool = True
+        adj: str = 'qfq'
     ) -> pd.DataFrame:
         """
-        获取周线行情数据
+        获取股票周线行情数据
         
         Args:
-            ts_code: 股票代码
-            start_date: 开始日期
-            end_date: 结束日期
-            adj: 复权类型
-            with_indicators: 是否计算技术指标
+            ts_code: 股票代码，支持多个股票同时提取，逗号分隔 (如: 000001.SZ)
+            start_date: 开始日期，格式为 YYYYMMDD 或 YYYY-MM-DD (如: 20180701)
+            end_date: 结束日期，格式为 YYYYMMDD 或 YYYY-MM-DD (如: 20180718)
+            adj: 复权类型 ('qfq':前复权, 'hfq':后复权, None:不复权)
         
         Returns:
-            周线数据DataFrame
+            pd.DataFrame: 包含以下字段的周线行情数据
+                - ts_code (str): 股票代码
+                - trade_date (str): 交易日期（周的最后一个交易日）
+                - open (float): 开盘价（周的第一个交易日开盘价）
+                - high (float): 最高价（周内最高价）
+                - low (float): 最低价（周内最低价）
+                - close (float): 收盘价（周的最后一个交易日收盘价）
+                - pre_close (float): 上周收盘价
+                - change (float): 涨跌额
+                - pct_chg (float): 涨跌幅
+                - vol (float): 成交量（手）
+                - amount (float): 成交额（千元）
+        
+        Raises:
+            DataFlowException: 当 Tushare 未配置、股票代码无效或数据获取失败时
         """
         if not self.tushare_enabled:
             raise DataFlowException("Tushare未配置或未启用")
@@ -189,9 +214,6 @@ class KLineDataFetcher:
             df = clean_dataframe(df)
             df = df.sort_values('trade_date').reset_index(drop=True)
             
-            if with_indicators:
-                df = calculate_technical_indicators(df)
-            
             logger.info(f"成功获取 {len(df)} 条周线数据")
             return df
             
@@ -204,21 +226,33 @@ class KLineDataFetcher:
         ts_code: str,
         start_date: str,
         end_date: str,
-        adj: str = 'qfq',
-        with_indicators: bool = True
+        adj: str = 'qfq'
     ) -> pd.DataFrame:
         """
-        获取月线行情数据
+        获取股票月线行情数据
         
         Args:
-            ts_code: 股票代码
-            start_date: 开始日期
-            end_date: 结束日期
-            adj: 复权类型
-            with_indicators: 是否计算技术指标
+            ts_code: 股票代码，支持多个股票同时提取，逗号分隔 (如: 000001.SZ)
+            start_date: 开始日期，格式为 YYYYMMDD 或 YYYY-MM-DD (如: 20180701)
+            end_date: 结束日期，格式为 YYYYMMDD 或 YYYY-MM-DD (如: 20180718)
+            adj: 复权类型 ('qfq':前复权, 'hfq':后复权, None:不复权)
         
         Returns:
-            月线数据DataFrame
+            pd.DataFrame: 包含以下字段的月线行情数据
+                - ts_code (str): 股票代码
+                - trade_date (str): 交易日期（月的最后一个交易日）
+                - open (float): 开盘价（月的第一个交易日开盘价）
+                - high (float): 最高价（月内最高价）
+                - low (float): 最低价（月内最低价）
+                - close (float): 收盘价（月的最后一个交易日收盘价）
+                - pre_close (float): 上月收盘价
+                - change (float): 涨跌额
+                - pct_chg (float): 涨跌幅
+                - vol (float): 成交量（手）
+                - amount (float): 成交额（千元）
+        
+        Raises:
+            DataFlowException: 当 Tushare 未配置、股票代码无效或数据获取失败时
         """
         if not self.tushare_enabled:
             raise DataFlowException("Tushare未配置或未启用")
@@ -248,9 +282,6 @@ class KLineDataFetcher:
             df = clean_dataframe(df)
             df = df.sort_values('trade_date').reset_index(drop=True)
             
-            if with_indicators:
-                df = calculate_technical_indicators(df)
-            
             logger.info(f"成功获取 {len(df)} 条月线数据")
             return df
             
@@ -258,252 +289,3 @@ class KLineDataFetcher:
             logger.error(f"获取月线数据失败: {e}")
             raise DataFlowException(f"获取月线数据失败: {e}")
     
-    async def get_minute_data(
-        self,
-        ts_code: str,
-        trade_date: str,
-        freq: str = '1min'
-    ) -> pd.DataFrame:
-        """
-        获取分钟级行情数据
-        
-        Args:
-            ts_code: 股票代码
-            trade_date: 交易日期
-            freq: 频率 ('1min', '5min', '15min', '30min', '60min')
-        
-        Returns:
-            分钟数据DataFrame
-        """
-        if not self.tushare_enabled:
-            raise DataFlowException("Tushare未配置或未启用")
-        
-        try:
-            # 格式化日期
-            trade_date_fmt = format_date(trade_date, 'tushare')
-            
-            # 限频
-            await tushare_limiter.acquire()
-            
-            logger.info(f"获取分钟数据: {ts_code}, {trade_date_fmt}, {freq}")
-            
-            # 获取分钟数据
-            df = ts.get_hist_data(
-                ts_code.split('.')[0],  # 去掉后缀
-                start=trade_date_fmt,
-                end=trade_date_fmt,
-                ktype=freq
-            )
-            
-            if df is None or df.empty:
-                logger.warning(f"未获取到分钟数据: {ts_code}")
-                return pd.DataFrame()
-            
-            # 重置索引，将日期时间作为列
-            df = df.reset_index()
-            df['ts_code'] = ts_code
-            df['trade_date'] = trade_date_fmt
-            
-            # 重命名列
-            column_mapping = {
-                'date': 'trade_time',
-                'volume': 'vol'
-            }
-            df = df.rename(columns=column_mapping)
-            
-            # 数据处理
-            df = clean_dataframe(df)
-            
-            logger.info(f"成功获取 {len(df)} 条分钟数据")
-            return df
-            
-        except Exception as e:
-            logger.error(f"获取分钟数据失败: {e}")
-            raise DataFlowException(f"获取分钟数据失败: {e}")
-    
-    async def get_realtime_data(self, ts_codes: List[str]) -> pd.DataFrame:
-        """
-        获取实时行情数据
-        
-        Args:
-            ts_codes: 股票代码列表
-        
-        Returns:
-            实时行情DataFrame
-        """
-        if not self.tushare_enabled:
-            raise DataFlowException("Tushare未配置或未启用")
-        
-        try:
-            # 限频
-            await tushare_limiter.acquire()
-            
-            logger.info(f"获取实时数据: {len(ts_codes)} 只股票")
-            
-            # 获取实时数据
-            df = ts.get_realtime_quotes(ts_codes)
-            
-            if df is None or df.empty:
-                logger.warning("未获取到实时数据")
-                return pd.DataFrame()
-            
-            # 数据处理
-            df = clean_dataframe(df)
-            
-            logger.info(f"成功获取 {len(df)} 条实时数据")
-            return df
-            
-        except Exception as e:
-            logger.error(f"获取实时数据失败: {e}")
-            raise DataFlowException(f"获取实时数据失败: {e}")
-    
-    async def get_stock_list(self, market: str = 'all') -> pd.DataFrame:
-        """
-        获取股票列表
-        
-        Args:
-            market: 市场类型 ('all', 'main', 'sme', 'gem', 'sci', 'bj')
-        
-        Returns:
-            股票列表DataFrame
-        """
-        if not self.tushare_enabled:
-            raise DataFlowException("Tushare未配置或未启用")
-        
-        try:
-            # 限频
-            await tushare_limiter.acquire()
-            
-            logger.info(f"获取股票列表: {market}")
-            
-            # 获取股票列表
-            if market == 'all':
-                df = self.ts_pro.stock_basic(exchange='', list_status='L')
-            else:
-                df = self.ts_pro.stock_basic(market=market, list_status='L')
-            
-            if df.empty:
-                logger.warning("未获取到股票列表")
-                return pd.DataFrame()
-            
-            # 数据处理
-            df = clean_dataframe(df)
-            
-            logger.info(f"成功获取 {len(df)} 只股票信息")
-            return df
-            
-        except Exception as e:
-            logger.error(f"获取股票列表失败: {e}")
-            raise DataFlowException(f"获取股票列表失败: {e}")
-    
-    async def get_trading_calendar(
-        self,
-        start_date: str,
-        end_date: str,
-        exchange: str = 'SSE'
-    ) -> pd.DataFrame:
-        """
-        获取交易日历
-        
-        Args:
-            start_date: 开始日期
-            end_date: 结束日期
-            exchange: 交易所 ('SSE', 'SZSE')
-        
-        Returns:
-            交易日历DataFrame
-        """
-        if not self.tushare_enabled:
-            raise DataFlowException("Tushare未配置或未启用")
-        
-        try:
-            # 格式化日期
-            start_date_fmt = format_date(start_date, 'tushare')
-            end_date_fmt = format_date(end_date, 'tushare')
-            
-            # 限频
-            await tushare_limiter.acquire()
-            
-            logger.info(f"获取交易日历: {start_date_fmt} - {end_date_fmt}")
-            
-            # 获取交易日历
-            df = self.ts_pro.trade_cal(
-                exchange=exchange,
-                start_date=start_date_fmt,
-                end_date=end_date_fmt
-            )
-            
-            if df.empty:
-                logger.warning("未获取到交易日历")
-                return pd.DataFrame()
-            
-            # 数据处理
-            df = clean_dataframe(df)
-            
-            logger.info(f"成功获取 {len(df)} 条交易日历数据")
-            return df
-            
-        except Exception as e:
-            logger.error(f"获取交易日历失败: {e}")
-            raise DataFlowException(f"获取交易日历失败: {e}")
-
-
-# 便捷函数
-async def get_daily_kline(
-    ts_code: str,
-    start_date: str,
-    end_date: str,
-    adj: str = 'qfq',
-    with_indicators: bool = True
-) -> pd.DataFrame:
-    """
-    获取日线K线数据的便捷函数
-    
-    Args:
-        ts_code: 股票代码
-        start_date: 开始日期
-        end_date: 结束日期
-        adj: 复权类型
-        with_indicators: 是否计算技术指标
-    
-    Returns:
-        日线数据DataFrame
-    """
-    async with KLineDataFetcher() as fetcher:
-        return await fetcher.get_daily_data(ts_code, start_date, end_date, adj, with_indicators)
-
-
-async def get_weekly_kline(
-    ts_code: str,
-    start_date: str,
-    end_date: str,
-    adj: str = 'qfq',
-    with_indicators: bool = True
-) -> pd.DataFrame:
-    """
-    获取周线K线数据的便捷函数
-    """
-    async with KLineDataFetcher() as fetcher:
-        return await fetcher.get_weekly_data(ts_code, start_date, end_date, adj, with_indicators)
-
-
-async def get_monthly_kline(
-    ts_code: str,
-    start_date: str,
-    end_date: str,
-    adj: str = 'qfq',
-    with_indicators: bool = True
-) -> pd.DataFrame:
-    """
-    获取月线K线数据的便捷函数
-    """
-    async with KLineDataFetcher() as fetcher:
-        return await fetcher.get_monthly_data(ts_code, start_date, end_date, adj, with_indicators)
-
-
-async def get_stock_list(market: str = 'all') -> pd.DataFrame:
-    """
-    获取股票列表的便捷函数
-    """
-    async with KLineDataFetcher() as fetcher:
-        return await fetcher.get_stock_list(market)
