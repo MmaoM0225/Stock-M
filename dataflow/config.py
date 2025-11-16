@@ -41,13 +41,6 @@ DATA_SOURCES = {
     }
 }
 
-# 缓存配置
-CACHE_CONFIG = {
-    'enabled': True,
-    'ttl': 3600,  # 1小时
-    'max_size': 1000
-}
-
 # 技术指标配置
 TECHNICAL_INDICATORS_CONFIG = {
     # 移动平均线配置

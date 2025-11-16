@@ -163,8 +163,9 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     for col in numeric_columns:
         if col not in ['ts_code', 'symbol', 'name', 'trade_date']:
             try:
-                df[col] = pd.to_numeric(df[col], errors='ignore')
-            except:
+                df[col] = pd.to_numeric(df[col])
+            except (ValueError, TypeError):
+                # 如果转换失败，保持原始数据类型
                 pass
     
     return df
