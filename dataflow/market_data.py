@@ -2,8 +2,6 @@
 市场数据获取模块
 包括资金流向、融资融券、龙虎榜、机构数据等
 """
-import asyncio
-import aiohttp
 import pandas as pd
 import tushare as ts
 from typing import Dict, List, Optional, Any
@@ -12,8 +10,8 @@ import logging
 
 from .config import DATA_SOURCES
 from .utils import (
-    format_date, validate_stock_code, async_request,
-    clean_dataframe, tushare_limiter, DataFlowException
+    format_date, validate_stock_code,
+    clean_dataframe, DataFlowException
 )
 
 logger = logging.getLogger(__name__)
@@ -28,20 +26,8 @@ class MarketDataFetcher:
         if self.tushare_enabled:
             ts.set_token(DATA_SOURCES['tushare']['token'])
             self.ts_pro = ts.pro_api()
-        
-        self.session: Optional[aiohttp.ClientSession] = None
     
-    async def __aenter__(self):
-        """异步上下文管理器入口"""
-        self.session = aiohttp.ClientSession()
-        return self
-    
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """异步上下文管理器出口"""
-        if self.session:
-            await self.session.close()
-    
-    async def get_money_flow(
+    def get_money_flow(
         self,
         ts_code: str,
         start_date: str,
@@ -65,9 +51,6 @@ class MarketDataFetcher:
             # 格式化日期
             start_date_fmt = format_date(start_date, 'tushare')
             end_date_fmt = format_date(end_date, 'tushare')
-            
-            # 限频
-            await tushare_limiter.acquire()
             
             logger.info(f"获取资金流向: {ts_code}, {start_date_fmt} - {end_date_fmt}")
             
@@ -93,7 +76,7 @@ class MarketDataFetcher:
             logger.error(f"获取资金流向失败: {e}")
             raise DataFlowException(f"获取资金流向失败: {e}")
     
-    async def get_margin_detail(
+    def get_margin_detail(
         self,
         trade_date: str,
         ts_code: str = None
@@ -114,9 +97,6 @@ class MarketDataFetcher:
         try:
             # 格式化日期
             trade_date_fmt = format_date(trade_date, 'tushare')
-            
-            # 限频
-            await tushare_limiter.acquire()
             
             logger.info(f"获取融资融券明细: {trade_date_fmt}, {ts_code or '全市场'}")
             
@@ -140,7 +120,7 @@ class MarketDataFetcher:
             logger.error(f"获取融资融券明细失败: {e}")
             raise DataFlowException(f"获取融资融券明细失败: {e}")
     
-    async def get_margin_target(self, ts_code: str = None) -> pd.DataFrame:
+    def get_margin_target(self, ts_code: str = None) -> pd.DataFrame:
         """
         获取融资融券标的
         
@@ -154,9 +134,6 @@ class MarketDataFetcher:
             raise DataFlowException("Tushare未配置或未启用")
         
         try:
-            # 限频
-            await tushare_limiter.acquire()
-            
             logger.info(f"获取融资融券标的: {ts_code or '全部'}")
             
             # 获取融资融券标的
@@ -176,7 +153,7 @@ class MarketDataFetcher:
             logger.error(f"获取融资融券标的失败: {e}")
             raise DataFlowException(f"获取融资融券标的失败: {e}")
     
-    async def get_top10_holders(
+    def get_top10_holders(
         self,
         ts_code: str,
         period: str,
@@ -201,9 +178,6 @@ class MarketDataFetcher:
             period_fmt = format_date(period, 'tushare')
             ann_date_fmt = format_date(ann_date, 'tushare') if ann_date else None
             
-            # 限频
-            await tushare_limiter.acquire()
-            
             logger.info(f"获取前十大股东: {ts_code}, {period_fmt}")
             
             # 获取前十大股东
@@ -227,7 +201,7 @@ class MarketDataFetcher:
             logger.error(f"获取前十大股东失败: {e}")
             raise DataFlowException(f"获取前十大股东失败: {e}")
     
-    async def get_top10_floatholders(
+    def get_top10_floatholders(
         self,
         ts_code: str,
         period: str,
@@ -252,9 +226,6 @@ class MarketDataFetcher:
             period_fmt = format_date(period, 'tushare')
             ann_date_fmt = format_date(ann_date, 'tushare') if ann_date else None
             
-            # 限频
-            await tushare_limiter.acquire()
-            
             logger.info(f"获取前十大流通股东: {ts_code}, {period_fmt}")
             
             # 获取前十大流通股东
@@ -278,7 +249,7 @@ class MarketDataFetcher:
             logger.error(f"获取前十大流通股东失败: {e}")
             raise DataFlowException(f"获取前十大流通股东失败: {e}")
     
-    async def get_dragon_tiger_list(
+    def get_dragon_tiger_list(
         self,
         trade_date: str,
         ts_code: str = None
@@ -299,9 +270,6 @@ class MarketDataFetcher:
         try:
             # 格式化日期
             trade_date_fmt = format_date(trade_date, 'tushare')
-            
-            # 限频
-            await tushare_limiter.acquire()
             
             logger.info(f"获取龙虎榜: {trade_date_fmt}, {ts_code or '全市场'}")
             
@@ -325,7 +293,7 @@ class MarketDataFetcher:
             logger.error(f"获取龙虎榜失败: {e}")
             raise DataFlowException(f"获取龙虎榜失败: {e}")
     
-    async def get_dragon_tiger_institutions(
+    def get_dragon_tiger_institutions(
         self,
         trade_date: str,
         ts_code: str = None
@@ -346,9 +314,6 @@ class MarketDataFetcher:
         try:
             # 格式化日期
             trade_date_fmt = format_date(trade_date, 'tushare')
-            
-            # 限频
-            await tushare_limiter.acquire()
             
             logger.info(f"获取龙虎榜机构明细: {trade_date_fmt}, {ts_code or '全市场'}")
             
@@ -372,7 +337,7 @@ class MarketDataFetcher:
             logger.error(f"获取龙虎榜机构明细失败: {e}")
             raise DataFlowException(f"获取龙虎榜机构明细失败: {e}")
     
-    async def get_block_trade(
+    def get_block_trade(
         self,
         ts_code: str,
         start_date: str,
@@ -396,9 +361,6 @@ class MarketDataFetcher:
             # 格式化日期
             start_date_fmt = format_date(start_date, 'tushare')
             end_date_fmt = format_date(end_date, 'tushare')
-            
-            # 限频
-            await tushare_limiter.acquire()
             
             logger.info(f"获取大宗交易: {ts_code}, {start_date_fmt} - {end_date_fmt}")
             
@@ -424,7 +386,7 @@ class MarketDataFetcher:
             logger.error(f"获取大宗交易失败: {e}")
             raise DataFlowException(f"获取大宗交易失败: {e}")
     
-    async def get_stk_holdernumber(
+    def get_stk_holdernumber(
         self,
         ts_code: str,
         start_date: str,
@@ -448,9 +410,6 @@ class MarketDataFetcher:
             # 格式化日期
             start_date_fmt = format_date(start_date, 'tushare')
             end_date_fmt = format_date(end_date, 'tushare')
-            
-            # 限频
-            await tushare_limiter.acquire()
             
             logger.info(f"获取股东人数: {ts_code}, {start_date_fmt} - {end_date_fmt}")
             
@@ -476,7 +435,7 @@ class MarketDataFetcher:
             logger.error(f"获取股东人数失败: {e}")
             raise DataFlowException(f"获取股东人数失败: {e}")
     
-    async def get_concept_detail(self, id: str) -> pd.DataFrame:
+    def get_concept_detail(self, id: str) -> pd.DataFrame:
         """
         获取概念股分类明细
         
@@ -490,9 +449,6 @@ class MarketDataFetcher:
             raise DataFlowException("Tushare未配置或未启用")
         
         try:
-            # 限频
-            await tushare_limiter.acquire()
-            
             logger.info(f"获取概念股明细: {id}")
             
             # 获取概念股明细
@@ -512,7 +468,7 @@ class MarketDataFetcher:
             logger.error(f"获取概念股明细失败: {e}")
             raise DataFlowException(f"获取概念股明细失败: {e}")
     
-    async def get_index_weight(
+    def get_index_weight(
         self,
         index_code: str,
         start_date: str,
@@ -536,9 +492,6 @@ class MarketDataFetcher:
             # 格式化日期
             start_date_fmt = format_date(start_date, 'tushare')
             end_date_fmt = format_date(end_date, 'tushare')
-            
-            # 限频
-            await tushare_limiter.acquire()
             
             logger.info(f"获取指数权重: {index_code}, {start_date_fmt} - {end_date_fmt}")
             
@@ -566,7 +519,7 @@ class MarketDataFetcher:
 
 
 # 便捷函数
-async def get_money_flow(
+def get_money_flow(
     ts_code: str,
     start_date: str,
     end_date: str
@@ -574,33 +527,33 @@ async def get_money_flow(
     """
     获取资金流向的便捷函数
     """
-    async with MarketDataFetcher() as fetcher:
-        return await fetcher.get_money_flow(ts_code, start_date, end_date)
+    fetcher = MarketDataFetcher()
+    return fetcher.get_money_flow(ts_code, start_date, end_date)
 
 
-async def get_margin_detail(
+def get_margin_detail(
     trade_date: str,
     ts_code: str = None
 ) -> pd.DataFrame:
     """
     获取融资融券明细的便捷函数
     """
-    async with MarketDataFetcher() as fetcher:
-        return await fetcher.get_margin_detail(trade_date, ts_code)
+    fetcher = MarketDataFetcher()
+    return fetcher.get_margin_detail(trade_date, ts_code)
 
 
-async def get_dragon_tiger_list(
+def get_dragon_tiger_list(
     trade_date: str,
     ts_code: str = None
 ) -> pd.DataFrame:
     """
     获取龙虎榜的便捷函数
     """
-    async with MarketDataFetcher() as fetcher:
-        return await fetcher.get_dragon_tiger_list(trade_date, ts_code)
+    fetcher = MarketDataFetcher()
+    return fetcher.get_dragon_tiger_list(trade_date, ts_code)
 
 
-async def get_top10_holders(
+def get_top10_holders(
     ts_code: str,
     period: str,
     ann_date: str = None
@@ -608,11 +561,11 @@ async def get_top10_holders(
     """
     获取前十大股东的便捷函数
     """
-    async with MarketDataFetcher() as fetcher:
-        return await fetcher.get_top10_holders(ts_code, period, ann_date)
+    fetcher = MarketDataFetcher()
+    return fetcher.get_top10_holders(ts_code, period, ann_date)
 
 
-async def get_block_trade(
+def get_block_trade(
     ts_code: str,
     start_date: str,
     end_date: str
@@ -620,5 +573,5 @@ async def get_block_trade(
     """
     获取大宗交易的便捷函数
     """
-    async with MarketDataFetcher() as fetcher:
-        return await fetcher.get_block_trade(ts_code, start_date, end_date)
+    fetcher = MarketDataFetcher()
+    return fetcher.get_block_trade(ts_code, start_date, end_date)

@@ -2,10 +2,9 @@
 新闻舆情数据获取模块
 包括新闻数据、公告数据、社交媒体情绪等
 """
-import asyncio
-import aiohttp
 import pandas as pd
 import tushare as ts
+import requests
 from typing import Dict, List, Optional, Any
 from datetime import datetime, date
 import logging
@@ -13,8 +12,8 @@ import json
 
 from .config import DATA_SOURCES, NEWS_API_KEY
 from .utils import (
-    format_date, validate_stock_code, async_request,
-    clean_dataframe, tushare_limiter, DataFlowException
+    format_date, validate_stock_code,
+    clean_dataframe, DataFlowException
 )
 
 logger = logging.getLogger(__name__)
@@ -31,19 +30,8 @@ class NewsSentimentFetcher:
             self.ts_pro = ts.pro_api()
         
         self.news_api_key = NEWS_API_KEY
-        self.session: Optional[aiohttp.ClientSession] = None
     
-    async def __aenter__(self):
-        """异步上下文管理器入口"""
-        self.session = aiohttp.ClientSession()
-        return self
-    
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """异步上下文管理器出口"""
-        if self.session:
-            await self.session.close()
-    
-    async def get_news(
+    def get_news(
         self,
         start_date: str,
         end_date: str,
@@ -67,9 +55,6 @@ class NewsSentimentFetcher:
             # 格式化日期
             start_date_fmt = format_date(start_date, 'tushare')
             end_date_fmt = format_date(end_date, 'tushare')
-            
-            # 限频
-            await tushare_limiter.acquire()
             
             logger.info(f"获取新闻数据: {start_date_fmt} - {end_date_fmt}, 来源: {src or '全部'}")
             
@@ -95,7 +80,7 @@ class NewsSentimentFetcher:
             logger.error(f"获取新闻数据失败: {e}")
             raise DataFlowException(f"获取新闻数据失败: {e}")
     
-    async def get_cctv_news(
+    def get_cctv_news(
         self,
         date: str
     ) -> pd.DataFrame:
@@ -114,9 +99,6 @@ class NewsSentimentFetcher:
         try:
             # 格式化日期
             date_fmt = format_date(date, 'tushare')
-            
-            # 限频
-            await tushare_limiter.acquire()
             
             logger.info(f"获取新闻联播: {date_fmt}")
             
@@ -137,7 +119,7 @@ class NewsSentimentFetcher:
             logger.error(f"获取新闻联播失败: {e}")
             raise DataFlowException(f"获取新闻联播失败: {e}")
     
-    async def get_announcements(
+    def get_announcements(
         self,
         ts_code: str,
         start_date: str,
@@ -164,9 +146,6 @@ class NewsSentimentFetcher:
             start_date_fmt = format_date(start_date, 'tushare')
             end_date_fmt = format_date(end_date, 'tushare')
             
-            # 限频
-            await tushare_limiter.acquire()
-            
             logger.info(f"获取公告: {ts_code}, {start_date_fmt} - {end_date_fmt}")
             
             # 获取公告数据
@@ -192,7 +171,7 @@ class NewsSentimentFetcher:
             logger.error(f"获取公告失败: {e}")
             raise DataFlowException(f"获取公告失败: {e}")
     
-    async def get_sz_interactions(
+    def get_sz_interactions(
         self,
         ts_code: str,
         start_date: str,
@@ -216,9 +195,6 @@ class NewsSentimentFetcher:
             # 格式化日期
             start_date_fmt = format_date(start_date, 'tushare')
             end_date_fmt = format_date(end_date, 'tushare')
-            
-            # 限频
-            await tushare_limiter.acquire()
             
             logger.info(f"获取深证易互动: {ts_code}, {start_date_fmt} - {end_date_fmt}")
             
@@ -244,7 +220,7 @@ class NewsSentimentFetcher:
             logger.error(f"获取互动问答失败: {e}")
             raise DataFlowException(f"获取互动问答失败: {e}")
     
-    async def get_research_reports(
+    def get_research_reports(
         self,
         ts_code: str,
         start_date: str,
@@ -268,9 +244,6 @@ class NewsSentimentFetcher:
             # 格式化日期
             start_date_fmt = format_date(start_date, 'tushare')
             end_date_fmt = format_date(end_date, 'tushare')
-            
-            # 限频
-            await tushare_limiter.acquire()
             
             logger.info(f"获取机构调研: {ts_code}, {start_date_fmt} - {end_date_fmt}")
             
@@ -296,7 +269,7 @@ class NewsSentimentFetcher:
             logger.error(f"获取机构调研失败: {e}")
             raise DataFlowException(f"获取机构调研失败: {e}")
     
-    async def get_external_news(
+    def get_external_news(
         self,
         query: str,
         from_date: str,
@@ -321,9 +294,6 @@ class NewsSentimentFetcher:
             logger.warning("News API Key未配置，跳过外部新闻获取")
             return []
         
-        if not self.session:
-            raise DataFlowException("HTTP会话未初始化")
-        
         try:
             # 格式化日期
             from_date_fmt = format_date(from_date, 'yahoo')
@@ -343,27 +313,22 @@ class NewsSentimentFetcher:
             
             # 发送请求
             url = 'https://newsapi.org/v2/everything'
-            response = await async_request(
-                self.session,
-                'GET',
-                url,
-                params=params,
-                timeout=30
-            )
+            response = requests.get(url, params=params, timeout=30)
             
-            if response.get('status') == 'ok':
-                articles = response.get('articles', [])
+            if response.status_code == 200:
+                data = response.json()
+                articles = data.get('articles', [])
                 logger.info(f"成功获取 {len(articles)} 条外部新闻")
                 return articles
             else:
-                logger.error(f"外部新闻API错误: {response.get('message', '未知错误')}")
+                logger.error(f"外部新闻API错误: 状态码 {response.status_code}")
                 return []
             
         except Exception as e:
             logger.error(f"获取外部新闻失败: {e}")
             return []
     
-    async def analyze_sentiment(
+    def analyze_sentiment(
         self,
         texts: List[str],
         method: str = 'simple'
@@ -417,7 +382,7 @@ class NewsSentimentFetcher:
             else:
                 # 高级情绪分析（可以集成更复杂的NLP模型）
                 logger.warning("高级情绪分析暂未实现，使用简单方法")
-                return await self.analyze_sentiment(texts, 'simple')
+                return self.analyze_sentiment(texts, 'simple')
             
             logger.info(f"完成情绪分析: {len(results)} 条结果")
             return results
@@ -426,7 +391,7 @@ class NewsSentimentFetcher:
             logger.error(f"情绪分析失败: {e}")
             return [{'sentiment': 'neutral', 'score': 0.0, 'confidence': 0.0}] * len(texts)
     
-    async def get_hot_topics(
+    def get_hot_topics(
         self,
         date: str,
         limit: int = 50
@@ -445,7 +410,7 @@ class NewsSentimentFetcher:
             logger.info(f"获取热门话题: {date}")
             
             # 获取当日新闻
-            news_df = await self.get_news(date, date)
+            news_df = self.get_news(date, date)
             
             if news_df.empty:
                 return pd.DataFrame()
@@ -482,7 +447,7 @@ class NewsSentimentFetcher:
 
 
 # 便捷函数
-async def get_news(
+def get_news(
     start_date: str,
     end_date: str,
     src: str = None
@@ -490,11 +455,11 @@ async def get_news(
     """
     获取新闻数据的便捷函数
     """
-    async with NewsSentimentFetcher() as fetcher:
-        return await fetcher.get_news(start_date, end_date, src)
+    fetcher = NewsSentimentFetcher()
+    return fetcher.get_news(start_date, end_date, src)
 
 
-async def get_announcements(
+def get_announcements(
     ts_code: str,
     start_date: str,
     end_date: str,
@@ -503,11 +468,11 @@ async def get_announcements(
     """
     获取公告数据的便捷函数
     """
-    async with NewsSentimentFetcher() as fetcher:
-        return await fetcher.get_announcements(ts_code, start_date, end_date, ann_type)
+    fetcher = NewsSentimentFetcher()
+    return fetcher.get_announcements(ts_code, start_date, end_date, ann_type)
 
 
-async def get_research_reports(
+def get_research_reports(
     ts_code: str,
     start_date: str,
     end_date: str
@@ -515,22 +480,22 @@ async def get_research_reports(
     """
     获取机构调研的便捷函数
     """
-    async with NewsSentimentFetcher() as fetcher:
-        return await fetcher.get_research_reports(ts_code, start_date, end_date)
+    fetcher = NewsSentimentFetcher()
+    return fetcher.get_research_reports(ts_code, start_date, end_date)
 
 
-async def analyze_news_sentiment(
+def analyze_news_sentiment(
     news_texts: List[str],
     method: str = 'simple'
 ) -> List[Dict[str, Any]]:
     """
     分析新闻情绪的便捷函数
     """
-    async with NewsSentimentFetcher() as fetcher:
-        return await fetcher.analyze_sentiment(news_texts, method)
+    fetcher = NewsSentimentFetcher()
+    return fetcher.analyze_sentiment(news_texts, method)
 
 
-async def get_stock_news_with_sentiment(
+def get_stock_news_with_sentiment(
     ts_code: str,
     start_date: str,
     end_date: str
@@ -546,29 +511,29 @@ async def get_stock_news_with_sentiment(
     Returns:
         包含情绪分析的新闻DataFrame
     """
-    async with NewsSentimentFetcher() as fetcher:
-        # 获取公告数据
-        announcements = await fetcher.get_announcements(ts_code, start_date, end_date)
-        
-        if announcements.empty:
-            return pd.DataFrame()
-        
-        # 提取文本内容
-        texts = []
-        for _, row in announcements.iterrows():
-            title = str(row.get('title', ''))
-            summary = str(row.get('summary', ''))
-            text = title + ' ' + summary
-            texts.append(text)
-        
-        # 情绪分析
-        sentiments = await fetcher.analyze_sentiment(texts)
-        
-        # 合并结果
-        for i, sentiment in enumerate(sentiments):
-            if i < len(announcements):
-                announcements.loc[i, 'sentiment'] = sentiment['sentiment']
-                announcements.loc[i, 'sentiment_score'] = sentiment['score']
-                announcements.loc[i, 'sentiment_confidence'] = sentiment['confidence']
-        
-        return announcements
+    fetcher = NewsSentimentFetcher()
+    # 获取公告数据
+    announcements = fetcher.get_announcements(ts_code, start_date, end_date)
+    
+    if announcements.empty:
+        return pd.DataFrame()
+    
+    # 提取文本内容
+    texts = []
+    for _, row in announcements.iterrows():
+        title = str(row.get('title', ''))
+        summary = str(row.get('summary', ''))
+        text = title + ' ' + summary
+        texts.append(text)
+    
+    # 情绪分析
+    sentiments = fetcher.analyze_sentiment(texts)
+    
+    # 合并结果
+    for i, sentiment in enumerate(sentiments):
+        if i < len(announcements):
+            announcements.loc[i, 'sentiment'] = sentiment['sentiment']
+            announcements.loc[i, 'sentiment_score'] = sentiment['score']
+            announcements.loc[i, 'sentiment_confidence'] = sentiment['confidence']
+    
+    return announcements

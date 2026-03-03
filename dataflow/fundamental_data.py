@@ -2,8 +2,6 @@
 基本面数据获取模块
 包括公司基本信息、财务报表数据等
 """
-import asyncio
-import aiohttp
 import pandas as pd
 import tushare as ts
 from typing import Dict, List, Optional, Any
@@ -12,8 +10,8 @@ import logging
 
 from .config import DATA_SOURCES
 from .utils import (
-    format_date, validate_stock_code, async_request,
-    clean_dataframe, tushare_limiter, DataFlowException
+    format_date, validate_stock_code,
+    clean_dataframe, DataFlowException
 )
 
 logger = logging.getLogger(__name__)
@@ -28,20 +26,8 @@ class FundamentalDataFetcher:
         if self.tushare_enabled:
             ts.set_token(DATA_SOURCES['tushare']['token'])
             self.ts_pro = ts.pro_api()
-        
-        self.session: Optional[aiohttp.ClientSession] = None
     
-    async def __aenter__(self):
-        """异步上下文管理器入口"""
-        self.session = aiohttp.ClientSession()
-        return self
-    
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """异步上下文管理器出口"""
-        if self.session:
-            await self.session.close()
-    
-    async def get_company_info(
+    def get_company_info(
         self, 
         ts_code: str, 
         fields: str = None
@@ -89,11 +75,8 @@ class FundamentalDataFetcher:
             raise DataFlowException(f"无效的股票代码: {ts_code}")
         
         try:
-            # 限频
-            await tushare_limiter.acquire()
-            
             logger.info(f"获取公司基础信息: {ts_code}")
-            
+
             # 构建请求参数
             params = {'ts_code': ts_code}
             if fields:
@@ -116,7 +99,7 @@ class FundamentalDataFetcher:
             logger.error(f"获取公司基础信息失败: {e}")
             raise DataFlowException(f"获取公司基础信息失败: {e}")
     
-    async def get_daily_basic(
+    def get_daily_basic(
         self,
         ts_code: str = None,
         trade_date: str = None,
@@ -191,9 +174,6 @@ class FundamentalDataFetcher:
             if fields:
                 params['fields'] = fields
             
-            # 限频
-            await tushare_limiter.acquire()
-            
             logger.info(f"获取每日基本面指标: {params}")
             
             # 获取每日基本面指标
@@ -217,7 +197,7 @@ class FundamentalDataFetcher:
             logger.error(f"获取每日基本面指标失败: {e}")
             raise DataFlowException(f"获取每日基本面指标失败: {e}")
     
-    async def get_income_statement(
+    def get_income_statement(
         self,
         ts_code: str,
         ann_date: str = None,
@@ -310,9 +290,6 @@ class FundamentalDataFetcher:
                          'n_income,n_income_attr_p,ebit,ebitda,rd_exp')
             params['fields'] = fields
             
-            # 限频
-            await tushare_limiter.acquire()
-            
             logger.info(f"获取利润表数据: {params}")
             
             # 获取利润表数据
@@ -336,7 +313,7 @@ class FundamentalDataFetcher:
             logger.error(f"获取利润表数据失败: {e}")
             raise DataFlowException(f"获取利润表数据失败: {e}")
     
-    async def get_balance_sheet(
+    def get_balance_sheet(
         self,
         ts_code: str,
         ann_date: str = None,
@@ -434,9 +411,6 @@ class FundamentalDataFetcher:
                          'total_liab_hldr_eqy')
             params['fields'] = fields
             
-            # 限频
-            await tushare_limiter.acquire()
-            
             logger.info(f"获取资产负债表数据: {params}")
             
             # 获取资产负债表数据
@@ -460,7 +434,7 @@ class FundamentalDataFetcher:
             logger.error(f"获取资产负债表数据失败: {e}")
             raise DataFlowException(f"获取资产负债表数据失败: {e}")
     
-    async def get_cashflow_statement(
+    def get_cashflow_statement(
         self,
         ts_code: str,
         ann_date: str = None,
@@ -571,9 +545,6 @@ class FundamentalDataFetcher:
                          'n_incr_cash_cash_equ,c_cash_equ_beg_period,c_cash_equ_end_period,free_cashflow')
             params['fields'] = fields
             
-            # 限频
-            await tushare_limiter.acquire()
-            
             logger.info(f"获取现金流量表数据: {params}")
             
             # 获取现金流量表数据
@@ -597,7 +568,7 @@ class FundamentalDataFetcher:
             logger.error(f"获取现金流量表数据失败: {e}")
             raise DataFlowException(f"获取现金流量表数据失败: {e}")
     
-    async def get_financial_indicators(
+    def get_financial_indicators(
         self,
         ts_code: str,
         ann_date: str = None,
@@ -688,9 +659,6 @@ class FundamentalDataFetcher:
                          'fa_turn,assets_turn,debt_to_assets,assets_to_eqt,ebit,ebitda,'
                          'fcff,fcfe,basic_eps_yoy,netprofit_yoy,roe_yoy,tr_yoy,or_yoy')
             params['fields'] = fields
-            
-            # 限频
-            await tushare_limiter.acquire()
             
             logger.info(f"获取财务指标数据: {params}")
             
