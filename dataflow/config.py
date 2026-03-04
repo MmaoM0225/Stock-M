@@ -15,6 +15,9 @@ TUSHARE_TOKEN = os.getenv('TUSHARE_TOKEN', '')
 ALPHA_VANTAGE_API_KEY = os.getenv('ALPHA_VANTAGE_API_KEY', '')
 YAHOO_FINANCE_ENABLED = True
 
+# AkShare配置
+AKSHARE_ENABLED = True
+
 # 新闻数据配置
 NEWS_API_KEY = os.getenv('NEWS_API_KEY', '')
 
@@ -38,6 +41,9 @@ DATA_SOURCES = {
     'yahoo_finance': {
         'enabled': YAHOO_FINANCE_ENABLED,
         'base_url': 'https://query1.finance.yahoo.com'
+    },
+    'akshare': {
+        'enabled': AKSHARE_ENABLED
     }
 }
 

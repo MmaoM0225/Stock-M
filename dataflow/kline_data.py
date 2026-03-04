@@ -2,8 +2,6 @@
 K线数据获取模块
 支持日线、周线、月线行情数据获取
 """
-import asyncio
-import aiohttp
 import pandas as pd
 import tushare as ts
 from typing import Dict, List, Optional, Any
@@ -12,8 +10,8 @@ import logging
 
 from .config import DATA_SOURCES
 from .utils import (
-    format_date, validate_stock_code, async_request, 
-    clean_dataframe, tushare_limiter, DataFlowException
+    format_date, validate_stock_code,
+    clean_dataframe, DataFlowException
 )
 
 logger = logging.getLogger(__name__)
@@ -28,20 +26,8 @@ class KLineDataFetcher:
         if self.tushare_enabled:
             ts.set_token(DATA_SOURCES['tushare']['token'])
             self.ts_pro = ts.pro_api()
-        
-        self.session: Optional[aiohttp.ClientSession] = None
     
-    async def __aenter__(self):
-        """异步上下文管理器入口"""
-        self.session = aiohttp.ClientSession()
-        return self
-    
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """异步上下文管理器出口"""
-        if self.session:
-            await self.session.close()
-    
-    async def get_daily_data(
+    def get_daily_data(
         self,
         ts_code: str,
         start_date: str,
@@ -91,9 +77,6 @@ class KLineDataFetcher:
             start_date_fmt = format_date(start_date, 'tushare')
             end_date_fmt = format_date(end_date, 'tushare')
             
-            # 限频
-            await tushare_limiter.acquire()
-            
             # 获取数据
             logger.info(f"获取日线数据: {ts_code}, {start_date_fmt} - {end_date_fmt}")
             
@@ -106,7 +89,6 @@ class KLineDataFetcher:
                 )
                 if not df.empty:
                     # 获取基础行情数据
-                    await tushare_limiter.acquire()
                     basic_df = self.ts_pro.daily(
                         ts_code=ts_code,
                         start_date=start_date_fmt,
@@ -153,7 +135,7 @@ class KLineDataFetcher:
             logger.error(f"获取日线数据失败: {e}")
             raise DataFlowException(f"获取日线数据失败: {e}")
     
-    async def get_weekly_data(
+    def get_weekly_data(
         self,
         ts_code: str,
         start_date: str,
@@ -194,9 +176,6 @@ class KLineDataFetcher:
             start_date_fmt = format_date(start_date, 'tushare')
             end_date_fmt = format_date(end_date, 'tushare')
             
-            # 限频
-            await tushare_limiter.acquire()
-            
             logger.info(f"获取周线数据: {ts_code}, {start_date_fmt} - {end_date_fmt}")
             
             # 获取周线数据
@@ -221,7 +200,7 @@ class KLineDataFetcher:
             logger.error(f"获取周线数据失败: {e}")
             raise DataFlowException(f"获取周线数据失败: {e}")
     
-    async def get_monthly_data(
+    def get_monthly_data(
         self,
         ts_code: str,
         start_date: str,
@@ -261,9 +240,6 @@ class KLineDataFetcher:
             # 格式化日期
             start_date_fmt = format_date(start_date, 'tushare')
             end_date_fmt = format_date(end_date, 'tushare')
-            
-            # 限频
-            await tushare_limiter.acquire()
             
             logger.info(f"获取月线数据: {ts_code}, {start_date_fmt} - {end_date_fmt}")
             
