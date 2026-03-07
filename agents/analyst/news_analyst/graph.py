@@ -30,12 +30,12 @@ class NewsState(TypedDict, total=False):
     messages: List[Any]
 
 
-def create_news_graph(llm, toolkit: Optional[Any] = None):
+def create_news_graph(llm, toolkit: Optional[Any] = None, fetcher: Optional[Any] = None):
     """
     构建新闻分析子图（map-reduce 风格）。
 
     流程：
-    1. news_fetch：从 state.news_data 中提取 sections，得到 news_sections
+    1. news_fetch：判断交易日 → 本地/拉取新闻 → 提取 sections
     2. map_sections_to_extract：根据 news_sections 动态生成并行的 news_extract 调用（Send）
     3. news_extract：对单条新闻 section 抽取结构化事件，写入 events（列表会自动聚合）
     4. news_reduce：对所有 events 做板块与宏观环境汇总，写入 news_analysis
@@ -43,6 +43,7 @@ def create_news_graph(llm, toolkit: Optional[Any] = None):
     Args:
         llm: 支持 with_structured_output 的 LLM 实例
         toolkit: 可选的 NewsToolkit，用于提供行业信息辅助
+        fetcher: 可选的 NewsSentimentFetcher，用于本地读取或远程抓取新闻（无则需在 invoke 时传入 news_data）
 
     Returns:
         已编译的新闻分析子图，可直接 invoke / stream。
@@ -50,7 +51,7 @@ def create_news_graph(llm, toolkit: Optional[Any] = None):
     builder = StateGraph(NewsState)
 
     # 注册节点
-    builder.add_node("news_fetch", create_news_fetch_node())
+    builder.add_node("news_fetch", create_news_fetch_node(fetcher))
     builder.add_node("news_extract", create_news_extract_node(llm, toolkit))
     builder.add_node("news_reduce", create_news_reduce_node(llm))
 

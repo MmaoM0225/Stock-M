@@ -2,10 +2,13 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.constants import Send
 from langgraph.graph import END
 import json
+import logging
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 from pydantic import BaseModel, Field, ConfigDict
 from enum import Enum
+
+logger = logging.getLogger(__name__)
 
 
 class EventType(str, Enum):
@@ -111,16 +114,88 @@ def _extract_json_text(raw) -> Dict[str, Any]:
     return json.loads(text)
 
 
-def create_news_fetch_node():
-    def news_fetch_node(state):
-        current_date = state.get("trade_date", datetime.now().strftime("%Y-%m-%d"))
-        news_data = state.get("news_data", {})
-        sections = news_data.get("sections", [])
+def _is_trading_day(date_str: str) -> bool:
+    """判断是否为交易日（周一至周五，暂不考虑节假日）。"""
+    try:
+        dt = datetime.strptime(date_str, "%Y%m%d")
+        return dt.weekday() < 5  # 0=Mon, 4=Fri
+    except ValueError:
+        return False
 
+
+def create_news_fetch_node(fetcher: Optional[Any] = None):
+    """
+    构建新闻获取节点。
+
+    流程：
+    1. 判断 trade_date 是否为交易日，否则返回空 sections 结束图
+    2. 若 state 已有 news_data，直接使用
+    3. 若有 fetcher：先尝试本地文件 (get_news_by_date)，无则 fetch (fetch_eastmoney_news_by_date)
+    4. 提取 sections 供后续分析
+
+    Args:
+        fetcher: 可选的 NewsSentimentFetcher，用于本地读取或远程抓取新闻
+    """
+
+    def news_fetch_node(state):
+        current_date = state.get("trade_date", datetime.now().strftime("%Y%m%d"))
+        news_data = state.get("news_data")
+
+        # 1. 非交易日则跳过
+        if not _is_trading_day(current_date):
+            logger.info(f"{current_date} 非交易日，跳过新闻分析")
+            return {
+                "messages": [{"type": "skip", "reason": "非交易日", "trade_date": current_date}],
+                "trade_date": current_date,
+                "news_sections": [],
+            }
+
+        # 2. 已有 news_data 则直接使用
+        if news_data and news_data.get("sections"):
+            sections = news_data.get("sections", [])
+            return {
+                "messages": [],
+                "trade_date": current_date,
+                "news_sections": sections,
+            }
+
+        # 3. 需要 fetcher 来获取新闻
+        if fetcher is None:
+            logger.warning("未提供 fetcher 且 state 无 news_data，无法获取新闻")
+            return {
+                "messages": [{"type": "skip", "reason": "无新闻数据且未配置 fetcher", "trade_date": current_date}],
+                "trade_date": current_date,
+                "news_sections": [],
+            }
+
+        # 3a. 先尝试本地文件
+        news_data = fetcher.get_news_by_date(current_date)
+        if news_data and news_data.get("sections"):
+            logger.info(f"从本地读取 {current_date} 新闻，共 {len(news_data['sections'])} 条")
+            return {
+                "messages": [],
+                "trade_date": current_date,
+                "news_sections": news_data.get("sections", []),
+            }
+
+        # 3b. 本地无则 fetch
+        try:
+            news_data = fetcher.fetch_eastmoney_news_by_date(current_date)
+            if news_data and news_data.get("sections"):
+                logger.info(f"抓取 {current_date} 新闻成功，共 {len(news_data['sections'])} 条")
+                return {
+                    "messages": [],
+                    "trade_date": current_date,
+                    "news_sections": news_data.get("sections", []),
+                }
+        except Exception as e:
+            logger.warning(f"抓取 {current_date} 新闻失败: {e}")
+
+        # 抓取失败
         return {
-            "messages": [],
+            "messages": [{"type": "skip", "reason": "获取新闻失败", "trade_date": current_date}],
             "trade_date": current_date,
-            "news_sections": sections or [],
+            "news_sections": [],
         }
 
     return news_fetch_node
@@ -250,7 +325,7 @@ def create_news_extract_node(llm, toolkit=None):
 
 def create_news_reduce_node(llm):
     def news_reduce_node(state):
-        current_date = state.get("trade_date", datetime.now().strftime("%Y-%m-%d"))
+        current_date = state.get("trade_date", datetime.now().strftime("%Y%m%d"))
         events = state.get("events", [])
         
         if not events:

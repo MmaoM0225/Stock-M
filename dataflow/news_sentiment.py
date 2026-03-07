@@ -280,7 +280,9 @@ class NewsSentimentFetcher:
                 result['title'] = title_elem.get_text(strip=True)
             
             if not use_old_format:
+                # 20250603 以后：每日精选为两个p标签一组，其他区块为一个p标签一组，标题与旧版一样命名
                 h3_sections = soup.find_all('h3', class_='emh3')
+                section_index = 1  # 用于旧版标题命名 title1, title2, ...
                 
                 for h3 in h3_sections:
                     section_title = h3.get_text(strip=True)
@@ -301,12 +303,22 @@ class NewsSentimentFetcher:
                         
                         next_sibling = next_sibling.find_next_sibling()
                     
-                    for i in range(0, len(p_list), 2):
-                        if i + 1 < len(p_list):
+                    if '每日精选' in section_title or '热点题材' in section_title:
+                        # 每日精选、热点题材：两个p标签为一组（第一个p为title，第二个p为content）
+                        for i in range(0, len(p_list), 2):
+                            if i + 1 < len(p_list):
+                                result['sections'].append({
+                                    'title': p_list[i],
+                                    'content': p_list[i + 1]
+                                })
+                    else:
+                        # 其他区块：一个p标签为一组，标题与旧版一样命名（title1, title2...）
+                        for p_text in p_list:
                             result['sections'].append({
-                                'title': p_list[i],
-                                'content': p_list[i + 1]
+                                'title': f'title{section_index}',
+                                'content': p_text
                             })
+                            section_index += 1
             else:
                 logger.info("使用旧格式解析（从txtinfos div中提取p标签）")
                 txtinfos_div = soup.find('div', class_='txtinfos')

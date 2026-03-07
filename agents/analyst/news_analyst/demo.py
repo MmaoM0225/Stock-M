@@ -4,10 +4,13 @@
 可以直接运行本文件，查看 map-reduce 子图是否能够正确运行：
 
     python -m agents.analyst.news_analyst.demo
+    python -m agents.analyst.news_analyst.demo 20260305
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
+import argparse
+import re
 from datetime import datetime, timedelta
 import time
 
@@ -91,7 +94,82 @@ class FakeLLM:
         raise RuntimeError("FakeLLM 未设置输出模型")
 
 
+def _parse_trade_date(s: str) -> datetime:
+    """解析交易日期，仅支持 YYYYMMDD。"""
+    s = s.strip()
+    if re.fullmatch(r"\d{8}", s):
+        return datetime.strptime(s, "%Y%m%d")
+    raise ValueError(f"无效日期格式: {s}，请使用 YYYYMMDD")
+
+
+def _resolve_date_and_news(
+    fetcher: NewsSentimentFetcher,
+    target_date: Optional[datetime],
+) -> tuple[str, Dict[str, Any]]:
+    """
+    根据目标日期解析交易日期和新闻数据。
+    - 若指定 target_date：仅获取该日期的新闻，失败时用 demo 数据并仍使用该日期。
+    - 若未指定：从今天起往前查找最近有数据的工作日。
+    """
+    today = datetime.now()
+    if target_date is not None:
+        if target_date.weekday() >= 5:
+            print(f"警告: {target_date.date()} 为周末，仍将尝试获取该日新闻。")
+        trade_date = target_date.strftime("%Y%m%d")
+        print(f"尝试获取日期 {trade_date} 的新闻数据...")
+        news_data = fetcher.get_news_by_date(trade_date)
+        if not news_data:
+            print("获取新闻失败，使用内置 Demo 新闻数据。")
+            news_data = {
+                "sections": [
+                    {"title": "测试新闻 1", "content": "这是第一条测试新闻内容。"},
+                    {"title": "测试新闻 2", "content": "这是第二条测试新闻内容。"},
+                ]
+            }
+        return trade_date, news_data
+
+    # 未指定日期：从今天往前查找
+    for i in range(7):
+        check_date = today - timedelta(days=i)
+        if check_date.weekday() >= 5:
+            continue
+        trade_date = check_date.strftime("%Y%m%d")
+        print(f"尝试获取日期 {trade_date} 的新闻数据...")
+        news_data = fetcher.get_news_by_date(trade_date)
+        if news_data:
+            print(f"成功获取到日期 {trade_date} 的新闻数据。")
+            return trade_date, news_data
+
+    print("获取最新新闻失败，使用内置 Demo 新闻数据。")
+    trade_date = today.strftime("%Y%m%d")
+    news_data = {
+        "sections": [
+            {"title": "测试新闻 1", "content": "这是第一条测试新闻内容。"},
+            {"title": "测试新闻 2", "content": "这是第二条测试新闻内容。"},
+        ]
+    }
+    return trade_date, news_data
+
+
 def main():
+    parser = argparse.ArgumentParser(description="新闻分析子图 Demo，支持分析指定交易日的新闻")
+    parser.add_argument(
+        "date",
+        nargs="?",
+        help="要分析的交易日期，格式：YYYYMMDD。不指定则从今天起往前查找最近有数据的工作日",
+    )
+    parser.add_argument(
+        "--date", "-d",
+        dest="date_alt",
+        help="同上，可用 --date 或 -d 显式指定",
+    )
+    args = parser.parse_args()
+    target_date: Optional[datetime] = None
+    raw = args.date or args.date_alt
+    if raw:
+        target_date = _parse_trade_date(raw)
+        print(f"指定分析日期: {target_date.strftime('%Y%m%d')}")
+
     # 1. 根据配置构建真实 LLM，如配置或环境变量不完整则回退到 FakeLLM
     llm_config = get_llm_config()
     if validate_config(llm_config):
@@ -110,49 +188,26 @@ def main():
 
     # 2. 构建行业提示工具（简单版，用于给 LLM 提示行业标签，不依赖 @tool 装饰器）
     toolkit = FakeToolkit()
-
-    graph = create_news_graph(llm, toolkit)
-
-    # 3. 优先尝试使用 NewsSentimentFetcher 获取最新真实新闻；失败时退回到内置 demo 数据
     fetcher = NewsSentimentFetcher()
-    news_data: Dict[str, Any] = None
+    graph = create_news_graph(llm, toolkit, fetcher)
 
-    # 从今天开始往前查找最近一个有数据的工作日
-    today = datetime.now()
-    for i in range(7):
-        check_date = today - timedelta(days=i)
-        # 跳过周末（周六=5，周日=6）
-        if check_date.weekday() >= 5:
-            continue
-        date_str = check_date.strftime("%Y%m%d")
-        print(f"尝试获取日期 {date_str} 的新闻数据...")
-        news_data = fetcher.get_news_by_date(date_str)
-        if news_data:
-            print(f"成功获取到日期 {date_str} 的新闻数据。")
-            break
-
-    if not news_data:
-        print("获取最新新闻失败，使用内置 Demo 新闻数据。")
-        news_data = {
-            "sections": [
-                {"title": "测试新闻 1", "content": "这是第一条测试新闻内容。"},
-                {"title": "测试新闻 2", "content": "这是第二条测试新闻内容。"},
-            ]
-        }
-
-    # 统计并打印本次要分析的新闻条数（全部纳入分析）
-    sections = news_data.get("sections", [])
-    print(f"本次共获取到 {len(sections)} 条新闻，将全部纳入分析。")
+    # 3. 构建 invoke 输入
+    # 指定日期：只传 trade_date，由 news_fetch_node 内部判断交易日、本地/fetch
+    # 未指定：先查找有数据的工作日，传入 news_data，节点直接用
+    if target_date is not None:
+        trade_date = target_date.strftime("%Y%m%d")
+        invoke_input: Dict[str, Any] = {"trade_date": trade_date}
+        print(f"交易日 {trade_date}，由 news_fetch 节点内部获取新闻（本地优先，无则抓取）。")
+    else:
+        trade_date, news_data = _resolve_date_and_news(fetcher, None)
+        invoke_input = {"trade_date": trade_date, "news_data": news_data}
+        sections = news_data.get("sections", [])
+        print(f"交易日 {trade_date}，预取 {len(sections)} 条新闻。")
 
     print("开始运行新闻分析子图...")
     start_time = time.perf_counter()
 
-    result = graph.invoke(
-        {
-            "trade_date": "2026-03-05",
-            "news_data": news_data,
-        }
-    )
+    result = graph.invoke(invoke_input)
 
     elapsed = time.perf_counter() - start_time
     print(f"新闻分析子图运行完成，耗时 {elapsed:.2f} 秒。")
