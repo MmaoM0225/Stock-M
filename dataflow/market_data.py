@@ -30,6 +30,68 @@ class MarketDataFetcher:
         
         self.akshare_enabled = DATA_SOURCES['akshare']['enabled']
     
+    def get_stock_basic(
+        self,
+        ts_code: str = None,
+        name: str = None,
+        market: str = None,
+        list_status: str = 'L',
+        exchange: str = None,
+        is_hs: str = None,
+        fields: str = None
+    ) -> pd.DataFrame:
+        """
+        获取基础信息数据，包括股票代码、名称、上市日期、退市日期等
+        
+        Args:
+            ts_code: TS股票代码
+            name: 名称
+            market: 市场类别（主板/创业板/科创板/CDR/北交所）
+            list_status: 上市状态 L上市 D退市 P暂停上市 G过会未交易，默认是L
+            exchange: 交易所 SSE上交所 SZSE深交所 BSE北交所
+            is_hs: 是否沪深港通标的，N否 H沪股通 S深股通
+            fields: 需要获取的字段，如 'ts_code,symbol,name,area,industry,list_date'
+        
+        Returns:
+            基础信息DataFrame
+        """
+        if not self.tushare_enabled:
+            raise DataFlowException("Tushare未配置或未启用")
+        
+        try:
+            logger.info(f"获取股票基础信息: ts_code={ts_code}, list_status={list_status}")
+            
+            params = {}
+            if ts_code:
+                params['ts_code'] = ts_code
+            if name:
+                params['name'] = name
+            if market:
+                params['market'] = market
+            if list_status:
+                params['list_status'] = list_status
+            if exchange:
+                params['exchange'] = exchange
+            if is_hs:
+                params['is_hs'] = is_hs
+            if fields:
+                params['fields'] = fields
+            
+            df = self.ts_pro.stock_basic(**params)
+            
+            if df.empty:
+                logger.warning("未获取到股票基础信息")
+                return pd.DataFrame()
+            
+            df = clean_dataframe(df)
+            
+            logger.info(f"成功获取 {len(df)} 条股票基础信息")
+            return df
+            
+        except Exception as e:
+            logger.error(f"获取股票基础信息失败: {e}")
+            raise DataFlowException(f"获取股票基础信息失败: {e}")
+    
     def get_money_flow(
         self,
         ts_code: str,
@@ -155,370 +217,6 @@ class MarketDataFetcher:
         except Exception as e:
             logger.error(f"获取融资融券标的失败: {e}")
             raise DataFlowException(f"获取融资融券标的失败: {e}")
-    
-    def get_top10_holders(
-        self,
-        ts_code: str,
-        period: str,
-        ann_date: str = None
-    ) -> pd.DataFrame:
-        """
-        获取前十大股东
-        
-        Args:
-            ts_code: 股票代码
-            period: 报告期
-            ann_date: 公告日期
-        
-        Returns:
-            前十大股东DataFrame
-        """
-        if not self.tushare_enabled:
-            raise DataFlowException("Tushare未配置或未启用")
-        
-        try:
-            # 格式化日期
-            period_fmt = format_date(period, 'tushare')
-            ann_date_fmt = format_date(ann_date, 'tushare') if ann_date else None
-            
-            logger.info(f"获取前十大股东: {ts_code}, {period_fmt}")
-            
-            # 获取前十大股东
-            df = self.ts_pro.top10_holders(
-                ts_code=ts_code,
-                period=period_fmt,
-                ann_date=ann_date_fmt
-            )
-            
-            if df.empty:
-                logger.warning(f"未获取到前十大股东: {ts_code}")
-                return pd.DataFrame()
-            
-            # 数据处理
-            df = clean_dataframe(df)
-            
-            logger.info(f"成功获取 {len(df)} 条前十大股东数据")
-            return df
-            
-        except Exception as e:
-            logger.error(f"获取前十大股东失败: {e}")
-            raise DataFlowException(f"获取前十大股东失败: {e}")
-    
-    def get_top10_floatholders(
-        self,
-        ts_code: str,
-        period: str,
-        ann_date: str = None
-    ) -> pd.DataFrame:
-        """
-        获取前十大流通股东
-        
-        Args:
-            ts_code: 股票代码
-            period: 报告期
-            ann_date: 公告日期
-        
-        Returns:
-            前十大流通股东DataFrame
-        """
-        if not self.tushare_enabled:
-            raise DataFlowException("Tushare未配置或未启用")
-        
-        try:
-            # 格式化日期
-            period_fmt = format_date(period, 'tushare')
-            ann_date_fmt = format_date(ann_date, 'tushare') if ann_date else None
-            
-            logger.info(f"获取前十大流通股东: {ts_code}, {period_fmt}")
-            
-            # 获取前十大流通股东
-            df = self.ts_pro.top10_floatholders(
-                ts_code=ts_code,
-                period=period_fmt,
-                ann_date=ann_date_fmt
-            )
-            
-            if df.empty:
-                logger.warning(f"未获取到前十大流通股东: {ts_code}")
-                return pd.DataFrame()
-            
-            # 数据处理
-            df = clean_dataframe(df)
-            
-            logger.info(f"成功获取 {len(df)} 条前十大流通股东数据")
-            return df
-            
-        except Exception as e:
-            logger.error(f"获取前十大流通股东失败: {e}")
-            raise DataFlowException(f"获取前十大流通股东失败: {e}")
-    
-    def get_dragon_tiger_list(
-        self,
-        trade_date: str,
-        ts_code: str = None
-    ) -> pd.DataFrame:
-        """
-        获取龙虎榜数据
-        
-        Args:
-            trade_date: 交易日期
-            ts_code: 股票代码（可选）
-        
-        Returns:
-            龙虎榜DataFrame
-        """
-        if not self.tushare_enabled:
-            raise DataFlowException("Tushare未配置或未启用")
-        
-        try:
-            # 格式化日期
-            trade_date_fmt = format_date(trade_date, 'tushare')
-            
-            logger.info(f"获取龙虎榜: {trade_date_fmt}, {ts_code or '全市场'}")
-            
-            # 获取龙虎榜数据
-            df = self.ts_pro.top_list(
-                trade_date=trade_date_fmt,
-                ts_code=ts_code
-            )
-            
-            if df.empty:
-                logger.warning(f"未获取到龙虎榜数据: {trade_date_fmt}")
-                return pd.DataFrame()
-            
-            # 数据处理
-            df = clean_dataframe(df)
-            
-            logger.info(f"成功获取 {len(df)} 条龙虎榜数据")
-            return df
-            
-        except Exception as e:
-            logger.error(f"获取龙虎榜失败: {e}")
-            raise DataFlowException(f"获取龙虎榜失败: {e}")
-    
-    def get_dragon_tiger_institutions(
-        self,
-        trade_date: str,
-        ts_code: str = None
-    ) -> pd.DataFrame:
-        """
-        获取龙虎榜机构交易明细
-        
-        Args:
-            trade_date: 交易日期
-            ts_code: 股票代码（可选）
-        
-        Returns:
-            龙虎榜机构明细DataFrame
-        """
-        if not self.tushare_enabled:
-            raise DataFlowException("Tushare未配置或未启用")
-        
-        try:
-            # 格式化日期
-            trade_date_fmt = format_date(trade_date, 'tushare')
-            
-            logger.info(f"获取龙虎榜机构明细: {trade_date_fmt}, {ts_code or '全市场'}")
-            
-            # 获取龙虎榜机构明细
-            df = self.ts_pro.top_inst(
-                trade_date=trade_date_fmt,
-                ts_code=ts_code
-            )
-            
-            if df.empty:
-                logger.warning(f"未获取到龙虎榜机构明细: {trade_date_fmt}")
-                return pd.DataFrame()
-            
-            # 数据处理
-            df = clean_dataframe(df)
-            
-            logger.info(f"成功获取 {len(df)} 条龙虎榜机构明细")
-            return df
-            
-        except Exception as e:
-            logger.error(f"获取龙虎榜机构明细失败: {e}")
-            raise DataFlowException(f"获取龙虎榜机构明细失败: {e}")
-    
-    def get_block_trade(
-        self,
-        ts_code: str,
-        start_date: str,
-        end_date: str
-    ) -> pd.DataFrame:
-        """
-        获取大宗交易数据
-        
-        Args:
-            ts_code: 股票代码
-            start_date: 开始日期
-            end_date: 结束日期
-        
-        Returns:
-            大宗交易DataFrame
-        """
-        if not self.tushare_enabled:
-            raise DataFlowException("Tushare未配置或未启用")
-        
-        try:
-            # 格式化日期
-            start_date_fmt = format_date(start_date, 'tushare')
-            end_date_fmt = format_date(end_date, 'tushare')
-            
-            logger.info(f"获取大宗交易: {ts_code}, {start_date_fmt} - {end_date_fmt}")
-            
-            # 获取大宗交易数据
-            df = self.ts_pro.block_trade(
-                ts_code=ts_code,
-                start_date=start_date_fmt,
-                end_date=end_date_fmt
-            )
-            
-            if df.empty:
-                logger.warning(f"未获取到大宗交易数据: {ts_code}")
-                return pd.DataFrame()
-            
-            # 数据处理
-            df = clean_dataframe(df)
-            df = df.sort_values('trade_date').reset_index(drop=True)
-            
-            logger.info(f"成功获取 {len(df)} 条大宗交易数据")
-            return df
-            
-        except Exception as e:
-            logger.error(f"获取大宗交易失败: {e}")
-            raise DataFlowException(f"获取大宗交易失败: {e}")
-    
-    def get_stk_holdernumber(
-        self,
-        ts_code: str,
-        start_date: str,
-        end_date: str
-    ) -> pd.DataFrame:
-        """
-        获取股东人数数据
-        
-        Args:
-            ts_code: 股票代码
-            start_date: 开始日期
-            end_date: 结束日期
-        
-        Returns:
-            股东人数DataFrame
-        """
-        if not self.tushare_enabled:
-            raise DataFlowException("Tushare未配置或未启用")
-        
-        try:
-            # 格式化日期
-            start_date_fmt = format_date(start_date, 'tushare')
-            end_date_fmt = format_date(end_date, 'tushare')
-            
-            logger.info(f"获取股东人数: {ts_code}, {start_date_fmt} - {end_date_fmt}")
-            
-            # 获取股东人数数据
-            df = self.ts_pro.stk_holdernumber(
-                ts_code=ts_code,
-                start_date=start_date_fmt,
-                end_date=end_date_fmt
-            )
-            
-            if df.empty:
-                logger.warning(f"未获取到股东人数数据: {ts_code}")
-                return pd.DataFrame()
-            
-            # 数据处理
-            df = clean_dataframe(df)
-            df = df.sort_values('end_date').reset_index(drop=True)
-            
-            logger.info(f"成功获取 {len(df)} 条股东人数数据")
-            return df
-            
-        except Exception as e:
-            logger.error(f"获取股东人数失败: {e}")
-            raise DataFlowException(f"获取股东人数失败: {e}")
-    
-    def get_concept_detail(self, id: str) -> pd.DataFrame:
-        """
-        获取概念股分类明细
-        
-        Args:
-            id: 概念分类ID
-        
-        Returns:
-            概念股明细DataFrame
-        """
-        if not self.tushare_enabled:
-            raise DataFlowException("Tushare未配置或未启用")
-        
-        try:
-            logger.info(f"获取概念股明细: {id}")
-            
-            # 获取概念股明细
-            df = self.ts_pro.concept_detail(id=id)
-            
-            if df.empty:
-                logger.warning(f"未获取到概念股明细: {id}")
-                return pd.DataFrame()
-            
-            # 数据处理
-            df = clean_dataframe(df)
-            
-            logger.info(f"成功获取 {len(df)} 条概念股明细")
-            return df
-            
-        except Exception as e:
-            logger.error(f"获取概念股明细失败: {e}")
-            raise DataFlowException(f"获取概念股明细失败: {e}")
-    
-    def get_index_weight(
-        self,
-        index_code: str,
-        start_date: str,
-        end_date: str
-    ) -> pd.DataFrame:
-        """
-        获取指数成分和权重
-        
-        Args:
-            index_code: 指数代码
-            start_date: 开始日期
-            end_date: 结束日期
-        
-        Returns:
-            指数权重DataFrame
-        """
-        if not self.tushare_enabled:
-            raise DataFlowException("Tushare未配置或未启用")
-        
-        try:
-            # 格式化日期
-            start_date_fmt = format_date(start_date, 'tushare')
-            end_date_fmt = format_date(end_date, 'tushare')
-            
-            logger.info(f"获取指数权重: {index_code}, {start_date_fmt} - {end_date_fmt}")
-            
-            # 获取指数权重
-            df = self.ts_pro.index_weight(
-                index_code=index_code,
-                start_date=start_date_fmt,
-                end_date=end_date_fmt
-            )
-            
-            if df.empty:
-                logger.warning(f"未获取到指数权重: {index_code}")
-                return pd.DataFrame()
-            
-            # 数据处理
-            df = clean_dataframe(df)
-            df = df.sort_values('trade_date').reset_index(drop=True)
-            
-            logger.info(f"成功获取 {len(df)} 条指数权重数据")
-            return df
-            
-        except Exception as e:
-            logger.error(f"获取指数权重失败: {e}")
-            raise DataFlowException(f"获取指数权重失败: {e}")
     
     def get_industry_list(
         self,
@@ -804,6 +502,38 @@ class MarketDataFetcher:
     
 
 # 便捷函数
+def get_stock_basic(
+    ts_code: str = None,
+    name: str = None,
+    market: str = None,
+    list_status: str = 'L',
+    exchange: str = None,
+    is_hs: str = None,
+    fields: str = None
+) -> pd.DataFrame:
+    """
+    获取股票基础信息的便捷函数
+    
+    Args:
+        ts_code: TS股票代码
+        name: 名称
+        market: 市场类别（主板/创业板/科创板/CDR/北交所）
+        list_status: 上市状态 L上市 D退市 P暂停上市 G过会未交易，默认是L
+        exchange: 交易所 SSE上交所 SZSE深交所 BSE北交所
+        is_hs: 是否沪深港通标的，N否 H沪股通 S深股通
+        fields: 需要获取的字段，如 'ts_code,symbol,name,area,industry,list_date'
+    
+    Returns:
+        基础信息DataFrame
+    
+    Example:
+        >>> df = get_stock_basic(exchange='', list_status='L', fields='ts_code,symbol,name,area,industry,list_date')
+        >>> df = get_stock_basic(ts_code='000001.SZ')
+    """
+    fetcher = MarketDataFetcher()
+    return fetcher.get_stock_basic(ts_code, name, market, list_status, exchange, is_hs, fields)
+
+
 def get_money_flow(
     ts_code: str,
     start_date: str,
