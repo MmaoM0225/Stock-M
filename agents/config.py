@@ -2,6 +2,7 @@
 使用 dotenv 加载环境变量配置 API Token，其他参数可动态配置
 """
 import os
+from re import T
 from dotenv import load_dotenv
 
 # 加载环境变量
@@ -127,6 +128,84 @@ class LoggingConfig:
             'level': self.level,
             'format': self.format
         }
+
+MACRO_DAILY_LOOKBACK = 60   # 日线回溯天数
+MACRO_MONTH_LOOKBACK = 12   # 月度回溯月数（LPR/CPI/社融）
+# Markdown 报告生成：由单独节点执行，configurable.macro_config 可覆盖
+MACRO_GENERATE_MARKDOWN = True  # 是否生成 macro Markdown 报告
+MACRO_USE_LLM_FOR_MARKDOWN = True  # 是否用 LLM 润色 MD（多一次调用、耗时增加）
+NEWS_GENERATE_MARKDOWN = False  # 是否生成 news Markdown 报告
+NEWS_USE_LLM_FOR_MARKDOWN = False  # 是否用 LLM 润色 news MD
+# 宏观经济分析师配置
+MACRO_USE_US_STOCK_TREND = False  # 是否纳入美股趋势分析
+# 国内市场分析默认指数：指数名称、指数代码、指数描述
+MACRO_DEFAULT_INDEX_CODES = [
+    {
+        "name": "上证综指",
+        "code": "000001.SH",
+        "description": "上海证券交易所综合股价指数，反映沪市整体表现",
+    },
+    {
+        "name": "沪深300",
+        "code": "000300.SH",
+        "description": "由沪深两市最具代表性的300只股票组成，反映A股市场整体走势",
+    },
+    {
+        "name": "中证500",
+        "code": "000905.SH",
+        "description": "剔除沪深300后、总市值排名靠前的500只股票，代表中盘股表现",
+    },
+    {
+        "name": "中证1000",
+        "code": "000852.SH",
+        "description": "剔除沪深300和中证500后、总市值排名靠前的1000只股票，代表小盘股表现",
+    },
+    {
+        "name": "创业板指",
+        "code": "399006.SZ",
+        "description": "深交所创业板最具代表性的100只股票，反映成长型公司整体表现",
+    },
+]
+# 大宗商品：name、code、description、source。source 区分数据源，合约代码需要及时更新
+# source: "sge" 上海黄金交易所现货 -> fetch_sge_daily；"fut" 期货 -> fetch_fut_daily
+MACRO_DEFAULT_COMMODITY_CODES = [
+    {
+        "name": "黄金",
+        "code": "Au99.99",
+        "description": "上海黄金交易所现货黄金，避险资产、通胀预期指标",
+        "source": "sge",
+    },
+    {
+        "name": "原油",
+        "code": "SC2604.INE",
+        "description": "INE 原油期货主力合约，能源价格、全球供需与地缘局势",
+        "source": "fut",
+    },
+    {
+        "name": "铜",
+        "code": "CU2604.SHF",
+        "description": "沪铜期货，工业金属代表，经济景气度指标",
+        "source": "fut",
+    },
+    {
+        "name": "螺纹钢",
+        "code": "RB2604.SHF",
+        "description": "上期所螺纹钢期货，基建、地产、建筑活动指标",
+        "source": "fut",
+    },
+    {
+        "name": "白银",
+        "code": "AG2606.SHF",
+        "description": "沪银期货，贵金属，与黄金联动、通胀预期",
+        "source": "fut",
+    },
+    {
+        "name": "铁矿石",
+        "code": "I2605.DCE",
+        "description": "大商所铁矿石期货，钢铁、基建投资需求",
+        "source": "fut",
+    },
+]
 
 
 # 默认配置实例

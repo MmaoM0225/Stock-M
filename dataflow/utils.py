@@ -5,7 +5,7 @@ import time
 import asyncio
 import aiohttp
 import pandas as pd
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 from datetime import datetime, date
 import logging
 
@@ -341,5 +341,5 @@ def calculate_macd(df: pd.DataFrame, fast_period: int = None, slow_period: int =
     df['macd_dif'] = dif
     df['macd_dea'] = dea
     df['macd_macd'] = macd
-    
+
     return df
