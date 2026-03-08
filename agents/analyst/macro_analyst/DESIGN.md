@@ -12,6 +12,8 @@
 
 ## 二、配置扩展（config）
 
+### 2.1 配置项
+
 在 **agents/config** 或宏观分析师专属配置中增加：
 
 - **`macro_use_us_stock_trend`**（bool）：是否在「全球环境」中纳入美股趋势判断。  
@@ -20,17 +22,26 @@
 
 （其他可选：宏观分析回溯区间、默认指数列表、大宗品种列表等，可在实现时再定。）
 
+### 2.2 配置传递方式
+
+**配置不作为 State 的一部分**。配置是「控制参数」，不随图执行而演进，建议通过以下方式传递：
+
+1. **RunnableConfig**（推荐）：调用时通过 `graph.invoke(input, config={"configurable": {"macro_config": {...}}})` 传入，节点通过 `config["configurable"]["macro_config"]` 读取。
+2. **图构建时注入**：在 `build_macro_graph(macro_config)` 中通过闭包注入，节点在定义时捕获 config。
+
+State 仅承载 `trade_date`、原始数据、分析结果等业务数据。
+
 ---
 
 ## 三、节点（Nodes）
 
-| 节点名 | 职责 | 输入（从 State 读） | 输出（写回 State） |
-|--------|------|--------------------|--------------------|
-| **macro_fetch** | 根据 trade_date 与 config 拉取所有原始数据 | `trade_date`、`macro_config`（含 `macro_use_us_stock_trend`） | `lpr_data`, `cpi_data`, `sf_data`, `us_stock_data`（可选）, `commodity_data`, `index_data`, `index_dailybasic`（或合并为 `market_index_data`） |
-| **monetary_analysis** | 货币环境分析 | `lpr_data`, `cpi_data`, `sf_data` | `monetary_analysis`（结构化结论） |
-| **global_analysis** | 全球环境分析 | `us_stock_data`（若启用）、`commodity_data`，以及 config 中的 `macro_use_us_stock_trend` | `global_analysis`（含美股趋势与否由 config 决定） |
+| 节点名 | 职责 | 输入（State） | 配置（非 State） | 输出（写回 State） |
+|--------|------|---------------|------------------|--------------------|
+| **macro_fetch** | 根据 trade_date 与 config 拉取所有原始数据 | `trade_date` | `macro_config`（RunnableConfig 或闭包） | `lpr_data`, `cpi_data`, `sf_data`, `us_stock_data`（可选）, `commodity_data`, `index_data`, `index_dailybasic`（或合并为 `market_index_data`） |
+| **monetary_analysis** | 货币环境分析 | `lpr_data`, `cpi_data`, `sf_data` | — | `monetary_analysis`（结构化结论） |
+| **global_analysis** | 全球环境分析 | `us_stock_data`（若启用）、`commodity_data` | `macro_config`（决定是否含美股趋势） | `global_analysis`（含美股趋势与否由 config 决定） |
 | **market_analysis** | A 股/指数/成交额/波动率分析 | `index_data`, `index_dailybasic`（或等价的市场日线与指标） | `market_analysis`（结构化结论） |
-| **macro_reduce** | 汇总三块结论，生成最终宏观报告 | `monetary_analysis`, `global_analysis`, `market_analysis`, `trade_date` | `macro_analysis`（最终报告） |
+| **macro_reduce** | 汇总三块结论，生成最终宏观报告 | `monetary_analysis`, `global_analysis`, `market_analysis`, `trade_date` | — | `macro_analysis`（最终报告） |
 
 说明：
 
@@ -80,8 +91,7 @@
 
 ```text
 MacroState
-├── trade_date: str                    # 分析基准日 YYYYMMDD
-├── macro_config: Dict[str, Any]        # 宏观分析师配置，含 macro_use_us_stock_trend 等
+├── trade_date: str                    # 分析基准日 YYYYMMDD（入口参数）
 │
 ├── # === 原始数据（由 macro_fetch 写入）===
 ├── lpr_data: Optional[DataFrame/List]  # LPR 序列
@@ -105,6 +115,8 @@ MacroState
 
 （实际实现时 DataFrame 在 State 里可用「可序列化」的 dict/list 或约定好的结构代替，以便 LangGraph 持久化。）
 
+**说明**：`macro_config` 不在 MacroState 中，通过 RunnableConfig 或图构建时闭包注入传递给 macro_fetch、global_analysis 等需要它的节点。
+
 ### 5.2 各分析结果子结构（建议）
 
 - **monetary_analysis**  
@@ -127,7 +139,7 @@ MacroState
 
 | 项目 | 新闻分析师 | 宏观经济分析师 |
 |------|------------|----------------|
-| 入口 | trade_date | trade_date + macro_config |
+| 入口 | trade_date | trade_date（config 单独传入） |
 | 数据来源 | 新闻 API/本地 | dataflow（LPR/CPI/社融/美股/大宗/指数） |
 | 并行 | map-reduce（按 section 并行 extract） | 三路并行（货币/全球/市场） |
 | 汇总 | news_reduce → news_analysis | macro_reduce → macro_analysis |
@@ -139,7 +151,7 @@ MacroState
 
 - **节点**：macro_fetch → monetary_analysis、global_analysis、market_analysis（可并行）→ macro_reduce。  
 - **图**：START → macro_fetch → [三条分析边] → macro_reduce → END。  
-- **状态**：MacroState 含 trade_date、macro_config、原始数据槽位、三块分析结果、macro_analysis 与可选 messages。  
+- **状态**：MacroState 含 trade_date、原始数据槽位、三块分析结果、macro_analysis 与可选 messages；config 不纳入 State。  
 - **配置**：通过 `macro_use_us_stock_trend` 控制是否拉取并判断美股趋势；数据均来自现有 dataflow 接口。
 
 本文档仅定义节点、图结构与数据结构，不涉及具体代码实现。
