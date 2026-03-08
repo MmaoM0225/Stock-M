@@ -8,6 +8,7 @@ import json
 from datetime import datetime
 
 from dataflow.market_data import MarketDataFetcher
+from dataflow.industry_data import fetch_industry_list as fetch_industry_list_api
 
 logging.basicConfig(
     level=logging.INFO,
@@ -71,8 +72,7 @@ def fetch_industry_list(level: str = 'L1', file_path: str = "data/industry_list.
         logger.info(f"开始获取行业分类列表 (level={level})")
         logger.info("=" * 50)
         
-        fetcher = MarketDataFetcher()
-        df = fetcher.get_industry_list(level=level)
+        df = fetch_industry_list_api(level=level)
         
         if df.empty:
             logger.warning("未获取到行业分类列表")

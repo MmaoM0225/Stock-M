@@ -129,17 +129,16 @@ def create_news_fetch_node(fetcher: Optional[Any] = None):
 
     流程：
     1. 判断 trade_date 是否为交易日，否则返回空 sections 结束图
-    2. 若 state 已有 news_data，直接使用
-    3. 若有 fetcher：先尝试本地文件 (get_news_by_date)，无则 fetch (fetch_eastmoney_news_by_date)
-    4. 提取 sections 供后续分析
+    2. 使用 fetcher：先尝试本地文件，无则 fetch
+    3. 使用 dataflow.industry_data 获取完整行业列表
+    4. 输出 sections、all_industries 供 extract 节点使用（fetch 只获取数据，不做判断）
 
     Args:
-        fetcher: 可选的 NewsSentimentFetcher，用于本地读取或远程抓取新闻
+        fetcher: NewsSentimentFetcher，用于本地读取或远程抓取新闻（必须提供）
     """
 
     def news_fetch_node(state):
         current_date = state.get("trade_date", datetime.now().strftime("%Y%m%d"))
-        news_data = state.get("news_data")
 
         # 1. 非交易日则跳过
         if not _is_trading_day(current_date):
@@ -150,20 +149,11 @@ def create_news_fetch_node(fetcher: Optional[Any] = None):
                 "news_sections": [],
             }
 
-        # 2. 已有 news_data 则直接使用
-        if news_data and news_data.get("sections"):
-            sections = news_data.get("sections", [])
-            return {
-                "messages": [],
-                "trade_date": current_date,
-                "news_sections": sections,
-            }
-
-        # 3. 需要 fetcher 来获取新闻
+        # 2. 需要 fetcher 来获取新闻
         if fetcher is None:
-            logger.warning("未提供 fetcher 且 state 无 news_data，无法获取新闻")
+            logger.warning("未提供 fetcher，无法获取新闻")
             return {
-                "messages": [{"type": "skip", "reason": "无新闻数据且未配置 fetcher", "trade_date": current_date}],
+                "messages": [{"type": "skip", "reason": "未配置 fetcher", "trade_date": current_date}],
                 "trade_date": current_date,
                 "news_sections": [],
             }
@@ -171,31 +161,37 @@ def create_news_fetch_node(fetcher: Optional[Any] = None):
         # 3a. 先尝试本地文件
         news_data = fetcher.get_news_by_date(current_date)
         if news_data and news_data.get("sections"):
-            logger.info(f"从本地读取 {current_date} 新闻，共 {len(news_data['sections'])} 条")
+            sections = news_data.get("sections", [])
+        else:
+            # 3b. 本地无则 fetch
+            sections = []
+            try:
+                news_data = fetcher.fetch_eastmoney_news_by_date(current_date)
+                if news_data and news_data.get("sections"):
+                    logger.info(f"抓取 {current_date} 新闻成功，共 {len(news_data['sections'])} 条")
+                    sections = news_data.get("sections", [])
+            except Exception as e:
+                logger.warning(f"抓取 {current_date} 新闻失败: {e}")
+
+        if not sections:
             return {
-                "messages": [],
+                "messages": [{"type": "skip", "reason": "获取新闻失败", "trade_date": current_date}],
                 "trade_date": current_date,
-                "news_sections": news_data.get("sections", []),
+                "news_sections": [],
             }
 
-        # 3b. 本地无则 fetch
+        # 4. 获取完整行业列表，供 extract 节点（LLM 从中选择）
         try:
-            news_data = fetcher.fetch_eastmoney_news_by_date(current_date)
-            if news_data and news_data.get("sections"):
-                logger.info(f"抓取 {current_date} 新闻成功，共 {len(news_data['sections'])} 条")
-                return {
-                    "messages": [],
-                    "trade_date": current_date,
-                    "news_sections": news_data.get("sections", []),
-                }
+            from dataflow.industry_data import get_all_industry_names
+            all_industries = get_all_industry_names()
         except Exception as e:
-            logger.warning(f"抓取 {current_date} 新闻失败: {e}")
-
-        # 抓取失败
+            logger.warning(f"获取行业列表失败: {e}")
+            all_industries = []
         return {
-            "messages": [{"type": "skip", "reason": "获取新闻失败", "trade_date": current_date}],
+            "messages": [],
             "trade_date": current_date,
-            "news_sections": [],
+            "news_sections": sections,
+            "all_industries": all_industries,
         }
 
     return news_fetch_node
@@ -205,7 +201,8 @@ def map_sections_to_extract(state):
     sections = state.get("news_sections", [])
     if not sections:
         return END
-    return [Send("news_extract", {"section": section}) for section in sections]
+    all_industries = state.get("all_industries", [])
+    return [Send("news_extract", {"section": section, "all_industries": all_industries}) for section in sections]
 
 
 def reduce_events(state, update):
@@ -216,7 +213,8 @@ def reduce_events(state, update):
     return {"events": events}
 
 
-def create_news_extract_node(llm, toolkit=None):
+def create_news_extract_node(llm):
+    """构建新闻抽取节点。all_industries 由 fetch 节点预先写入，LLM 从中选择相关行业。"""
     def news_extract_node(state):
         section = state.get("section", {})
         
@@ -228,21 +226,16 @@ def create_news_extract_node(llm, toolkit=None):
                 "events": []
             }
         
+        # 使用 fetch 节点预先获取的完整行业列表（LLM 做判断，从中选择相关行业）
+        all_industries: List[str] = state.get("all_industries", [])
         industry_info = ""
-        matched_industries: List[str] = []
-        if toolkit:
-            try:
-                info = toolkit.get_industry_info(content)
-                if info and info.get("matched_industries"):
-                    matched_industries = info["matched_industries"]
-                    industry_info = (
-                        "\n\n【可用行业列表】\n"
-                        "系统已经基于新闻内容识别出如下候选行业，请务必只从这些行业中选择：\n"
-                        f"{', '.join(matched_industries)}\n\n"
-                        "industry 字段必须是上述列表的子集，不要发明新的行业名称。"
-                    )
-            except Exception as e:
-                print(f"获取行业信息失败: {str(e)}")
+        if all_industries:
+            industry_info = (
+                "\n\n【可用行业列表】\n"
+                "请从以下完整行业列表中选择与本条新闻相关的行业：\n"
+                f"{', '.join(all_industries)}\n\n"
+                "industry 字段必须是上述列表的子集，不要发明新的行业名称。"
+            )
         
         system_message = (
             "您是一位专业的金融新闻分析师。您的任务是分析新闻内容，提取关键信息，"
