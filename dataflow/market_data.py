@@ -15,7 +15,21 @@ from .utils import (
     clean_dataframe, DataFlowException
 )
 
+try:
+    import yfinance as yf
+    YFINANCE_AVAILABLE = True
+except ImportError:
+    yf = None
+    YFINANCE_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
+
+# 雅虎财经常用美股指数代码
+YAHOO_INDEX_SYMBOLS = {
+    'SP500': '^GSPC',      # 标普500
+    'NASDAQ': '^IXIC',     # 纳斯达克综合
+    'DJI': '^DJI',         # 道琼斯工业
+}
 
 
 class MarketDataFetcher:
@@ -29,8 +43,71 @@ class MarketDataFetcher:
             self.ts_pro = ts.pro_api()
         
         self.akshare_enabled = DATA_SOURCES['akshare']['enabled']
+        self.yahoo_enabled = DATA_SOURCES['yahoo_finance']['enabled'] and YFINANCE_AVAILABLE
     
-    def get_money_flow(
+    def fetch_stock_basic(
+        self,
+        ts_code: str = None,
+        name: str = None,
+        market: str = None,
+        list_status: str = 'L',
+        exchange: str = None,
+        is_hs: str = None,
+        fields: str = None
+    ) -> pd.DataFrame:
+        """
+        获取基础信息数据，包括股票代码、名称、上市日期、退市日期等
+        
+        Args:
+            ts_code: TS股票代码
+            name: 名称
+            market: 市场类别（主板/创业板/科创板/CDR/北交所）
+            list_status: 上市状态 L上市 D退市 P暂停上市 G过会未交易，默认是L
+            exchange: 交易所 SSE上交所 SZSE深交所 BSE北交所
+            is_hs: 是否沪深港通标的，N否 H沪股通 S深股通
+            fields: 需要获取的字段，如 'ts_code,symbol,name,area,industry,list_date'
+        
+        Returns:
+            基础信息DataFrame
+        """
+        if not self.tushare_enabled:
+            raise DataFlowException("Tushare未配置或未启用")
+        
+        try:
+            logger.info(f"获取股票基础信息: ts_code={ts_code}, list_status={list_status}")
+            
+            params = {}
+            if ts_code:
+                params['ts_code'] = ts_code
+            if name:
+                params['name'] = name
+            if market:
+                params['market'] = market
+            if list_status:
+                params['list_status'] = list_status
+            if exchange:
+                params['exchange'] = exchange
+            if is_hs:
+                params['is_hs'] = is_hs
+            if fields:
+                params['fields'] = fields
+            
+            df = self.ts_pro.stock_basic(**params)
+            
+            if df.empty:
+                logger.warning("未获取到股票基础信息")
+                return pd.DataFrame()
+            
+            df = clean_dataframe(df)
+            
+            logger.info(f"成功获取 {len(df)} 条股票基础信息")
+            return df
+            
+        except Exception as e:
+            logger.error(f"获取股票基础信息失败: {e}")
+            raise DataFlowException(f"获取股票基础信息失败: {e}")
+    
+    def fetch_money_flow(
         self,
         ts_code: str,
         start_date: str,
@@ -79,7 +156,7 @@ class MarketDataFetcher:
             logger.error(f"获取资金流向失败: {e}")
             raise DataFlowException(f"获取资金流向失败: {e}")
     
-    def get_margin_detail(
+    def fetch_margin_detail(
         self,
         trade_date: str,
         ts_code: str = None
@@ -123,7 +200,7 @@ class MarketDataFetcher:
             logger.error(f"获取融资融券明细失败: {e}")
             raise DataFlowException(f"获取融资融券明细失败: {e}")
     
-    def get_margin_target(self, ts_code: str = None) -> pd.DataFrame:
+    def fetch_margin_target(self, ts_code: str = None) -> pd.DataFrame:
         """
         获取融资融券标的
         
@@ -156,498 +233,339 @@ class MarketDataFetcher:
             logger.error(f"获取融资融券标的失败: {e}")
             raise DataFlowException(f"获取融资融券标的失败: {e}")
     
-    def get_top10_holders(
+    def fetch_index_dailybasic(
         self,
-        ts_code: str,
-        period: str,
-        ann_date: str = None
+        ts_code: Optional[str] = None,
+        trade_date: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        fields: Optional[str] = None
     ) -> pd.DataFrame:
         """
-        获取前十大股东
+        获取大盘指数每日指标
+        
+        目前只提供上证综指(000001.SH)、深证成指(399001.SZ)、上证50(000016.SH)、
+        中证500(000905.SH)、中小板指(399005.SZ)、创业板指(399006.SZ)的每日指标数据。
+        数据从2004年1月开始提供。
         
         Args:
-            ts_code: 股票代码
-            period: 报告期
-            ann_date: 公告日期
+            ts_code: 指数代码，与 trade_date 至少输入一个 (如: 000001.SH)
+            trade_date: 交易日期，格式为 YYYYMMDD (如: 20181018)
+            start_date: 开始日期，格式为 YYYYMMDD
+            end_date: 结束日期，格式为 YYYYMMDD
+            fields: 指定获取的字段，用逗号分隔 (如: ts_code,trade_date,turnover_rate,pe)
+                   可选: ts_code,trade_date,total_mv,float_mv,total_share,float_share,
+                         free_share,turnover_rate,turnover_rate_f,pe,pe_ttm,pb
         
         Returns:
-            前十大股东DataFrame
+            pd.DataFrame: 包含以下字段的指数每日指标数据
+                - ts_code (str): 指数代码
+                - trade_date (str): 交易日期
+                - total_mv (float): 当日总市值（元）
+                - float_mv (float): 当日流通市值（元）
+                - total_share (float): 当日总股本（股）
+                - float_share (float): 当日流通股本（股）
+                - free_share (float): 当日自由流通股本（股）
+                - turnover_rate (float): 换手率
+                - turnover_rate_f (float): 换手率(基于自由流通股本)
+                - pe (float): 市盈率
+                - pe_ttm (float): 市盈率TTM
+                - pb (float): 市净率
+        
+        Raises:
+            DataFlowException: 当 Tushare 未配置、参数不足或数据获取失败时
+        
+        Note:
+            - trade_date 与 ts_code 至少要输入一个参数
+            - 单次限量 3000 条（单一指数可提取超12年历史）
+            - 用户需要至少 400 积分才可以调取
         """
         if not self.tushare_enabled:
             raise DataFlowException("Tushare未配置或未启用")
         
-        try:
-            # 格式化日期
-            period_fmt = format_date(period, 'tushare')
-            ann_date_fmt = format_date(ann_date, 'tushare') if ann_date else None
-            
-            logger.info(f"获取前十大股东: {ts_code}, {period_fmt}")
-            
-            # 获取前十大股东
-            df = self.ts_pro.top10_holders(
-                ts_code=ts_code,
-                period=period_fmt,
-                ann_date=ann_date_fmt
-            )
-            
-            if df.empty:
-                logger.warning(f"未获取到前十大股东: {ts_code}")
-                return pd.DataFrame()
-            
-            # 数据处理
-            df = clean_dataframe(df)
-            
-            logger.info(f"成功获取 {len(df)} 条前十大股东数据")
-            return df
-            
-        except Exception as e:
-            logger.error(f"获取前十大股东失败: {e}")
-            raise DataFlowException(f"获取前十大股东失败: {e}")
-    
-    def get_top10_floatholders(
-        self,
-        ts_code: str,
-        period: str,
-        ann_date: str = None
-    ) -> pd.DataFrame:
-        """
-        获取前十大流通股东
-        
-        Args:
-            ts_code: 股票代码
-            period: 报告期
-            ann_date: 公告日期
-        
-        Returns:
-            前十大流通股东DataFrame
-        """
-        if not self.tushare_enabled:
-            raise DataFlowException("Tushare未配置或未启用")
+        if not ts_code and not trade_date:
+            raise DataFlowException("ts_code 与 trade_date 至少要输入一个参数")
         
         try:
-            # 格式化日期
-            period_fmt = format_date(period, 'tushare')
-            ann_date_fmt = format_date(ann_date, 'tushare') if ann_date else None
+            kwargs: Dict[str, Any] = {}
+            if ts_code:
+                kwargs['ts_code'] = ts_code
+            if trade_date:
+                kwargs['trade_date'] = format_date(trade_date, 'tushare')
+            if start_date:
+                kwargs['start_date'] = format_date(start_date, 'tushare')
+            if end_date:
+                kwargs['end_date'] = format_date(end_date, 'tushare')
+            if fields:
+                kwargs['fields'] = fields
             
-            logger.info(f"获取前十大流通股东: {ts_code}, {period_fmt}")
+            logger.info(f"获取大盘指数每日指标: {kwargs}")
             
-            # 获取前十大流通股东
-            df = self.ts_pro.top10_floatholders(
-                ts_code=ts_code,
-                period=period_fmt,
-                ann_date=ann_date_fmt
-            )
-            
-            if df.empty:
-                logger.warning(f"未获取到前十大流通股东: {ts_code}")
-                return pd.DataFrame()
-            
-            # 数据处理
-            df = clean_dataframe(df)
-            
-            logger.info(f"成功获取 {len(df)} 条前十大流通股东数据")
-            return df
-            
-        except Exception as e:
-            logger.error(f"获取前十大流通股东失败: {e}")
-            raise DataFlowException(f"获取前十大流通股东失败: {e}")
-    
-    def get_dragon_tiger_list(
-        self,
-        trade_date: str,
-        ts_code: str = None
-    ) -> pd.DataFrame:
-        """
-        获取龙虎榜数据
-        
-        Args:
-            trade_date: 交易日期
-            ts_code: 股票代码（可选）
-        
-        Returns:
-            龙虎榜DataFrame
-        """
-        if not self.tushare_enabled:
-            raise DataFlowException("Tushare未配置或未启用")
-        
-        try:
-            # 格式化日期
-            trade_date_fmt = format_date(trade_date, 'tushare')
-            
-            logger.info(f"获取龙虎榜: {trade_date_fmt}, {ts_code or '全市场'}")
-            
-            # 获取龙虎榜数据
-            df = self.ts_pro.top_list(
-                trade_date=trade_date_fmt,
-                ts_code=ts_code
-            )
+            df = self.ts_pro.index_dailybasic(**kwargs)
             
             if df.empty:
-                logger.warning(f"未获取到龙虎榜数据: {trade_date_fmt}")
+                logger.warning("未获取到大盘指数每日指标数据")
                 return pd.DataFrame()
             
-            # 数据处理
-            df = clean_dataframe(df)
-            
-            logger.info(f"成功获取 {len(df)} 条龙虎榜数据")
-            return df
-            
-        except Exception as e:
-            logger.error(f"获取龙虎榜失败: {e}")
-            raise DataFlowException(f"获取龙虎榜失败: {e}")
-    
-    def get_dragon_tiger_institutions(
-        self,
-        trade_date: str,
-        ts_code: str = None
-    ) -> pd.DataFrame:
-        """
-        获取龙虎榜机构交易明细
-        
-        Args:
-            trade_date: 交易日期
-            ts_code: 股票代码（可选）
-        
-        Returns:
-            龙虎榜机构明细DataFrame
-        """
-        if not self.tushare_enabled:
-            raise DataFlowException("Tushare未配置或未启用")
-        
-        try:
-            # 格式化日期
-            trade_date_fmt = format_date(trade_date, 'tushare')
-            
-            logger.info(f"获取龙虎榜机构明细: {trade_date_fmt}, {ts_code or '全市场'}")
-            
-            # 获取龙虎榜机构明细
-            df = self.ts_pro.top_inst(
-                trade_date=trade_date_fmt,
-                ts_code=ts_code
-            )
-            
-            if df.empty:
-                logger.warning(f"未获取到龙虎榜机构明细: {trade_date_fmt}")
-                return pd.DataFrame()
-            
-            # 数据处理
-            df = clean_dataframe(df)
-            
-            logger.info(f"成功获取 {len(df)} 条龙虎榜机构明细")
-            return df
-            
-        except Exception as e:
-            logger.error(f"获取龙虎榜机构明细失败: {e}")
-            raise DataFlowException(f"获取龙虎榜机构明细失败: {e}")
-    
-    def get_block_trade(
-        self,
-        ts_code: str,
-        start_date: str,
-        end_date: str
-    ) -> pd.DataFrame:
-        """
-        获取大宗交易数据
-        
-        Args:
-            ts_code: 股票代码
-            start_date: 开始日期
-            end_date: 结束日期
-        
-        Returns:
-            大宗交易DataFrame
-        """
-        if not self.tushare_enabled:
-            raise DataFlowException("Tushare未配置或未启用")
-        
-        try:
-            # 格式化日期
-            start_date_fmt = format_date(start_date, 'tushare')
-            end_date_fmt = format_date(end_date, 'tushare')
-            
-            logger.info(f"获取大宗交易: {ts_code}, {start_date_fmt} - {end_date_fmt}")
-            
-            # 获取大宗交易数据
-            df = self.ts_pro.block_trade(
-                ts_code=ts_code,
-                start_date=start_date_fmt,
-                end_date=end_date_fmt
-            )
-            
-            if df.empty:
-                logger.warning(f"未获取到大宗交易数据: {ts_code}")
-                return pd.DataFrame()
-            
-            # 数据处理
             df = clean_dataframe(df)
             df = df.sort_values('trade_date').reset_index(drop=True)
             
-            logger.info(f"成功获取 {len(df)} 条大宗交易数据")
+            logger.info(f"成功获取 {len(df)} 条大盘指数每日指标")
             return df
             
         except Exception as e:
-            logger.error(f"获取大宗交易失败: {e}")
-            raise DataFlowException(f"获取大宗交易失败: {e}")
+            logger.error(f"获取大盘指数每日指标失败: {e}")
+            raise DataFlowException(f"获取大盘指数每日指标失败: {e}")
     
-    def get_stk_holdernumber(
+    def fetch_sge_daily(
         self,
-        ts_code: str,
-        start_date: str,
-        end_date: str
+        ts_code: Optional[str] = None,
+        trade_date: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        fields: Optional[str] = None
     ) -> pd.DataFrame:
         """
-        获取股东人数数据
+        获取上海黄金交易所现货合约日线行情
+        
+        支持 Au99.99、Au99.95、Au(T+D)、Ag(T+D)、Pt99.95 等品种。
+        数据由当日9:00至15:30的交易和前一日夜盘的20:00至2:30数据构成，
+        成交量和成交金额为双向计量。
         
         Args:
-            ts_code: 股票代码
-            start_date: 开始日期
-            end_date: 结束日期
+            ts_code: 合约代码，可通过基础信息接口获得 (如: Au99.99, Au(T+D))
+            trade_date: 交易日期，格式为 YYYYMMDD (如: 20220311)
+            start_date: 开始日期，格式为 YYYYMMDD
+            end_date: 结束日期，格式为 YYYYMMDD
+            fields: 指定获取的字段，用逗号分隔 (如: ts_code,close,open,vol)
+                   可选: ts_code,trade_date,close,open,high,low,price_avg,change,
+                         pct_change,vol,amount,oi,settle_vol,settle_dire
         
         Returns:
-            股东人数DataFrame
+            pd.DataFrame: 包含以下字段的现货黄金日行情数据
+                - ts_code (str): 现货合约代码
+                - trade_date (str): 交易日
+                - close (float): 收盘点(元/克)
+                - open (float): 开盘点(元/克)
+                - high (float): 最高点(元/克)
+                - low (float): 最低点(元/克)
+                - price_avg (float): 加权平均价(元/克)
+                - change (float): 涨跌点位(元/克)
+                - pct_change (float): 涨跌幅
+                - vol (float): 成交量(千克)
+                - amount (float): 成交金额(元)
+                - oi (float): 市场持仓
+                - settle_vol (float): 交收量
+                - settle_dire (str): 持仓方向
+        
+        Raises:
+            DataFlowException: 当 Tushare 未配置或数据获取失败时
+        
+        Note:
+            - 单次最大 2000 条，可循环或分页提取
+            - 用户需要至少 2000 积分才可以调取
         """
         if not self.tushare_enabled:
             raise DataFlowException("Tushare未配置或未启用")
         
         try:
-            # 格式化日期
-            start_date_fmt = format_date(start_date, 'tushare')
-            end_date_fmt = format_date(end_date, 'tushare')
+            kwargs: Dict[str, Any] = {}
+            if ts_code:
+                kwargs['ts_code'] = ts_code
+            if trade_date:
+                kwargs['trade_date'] = format_date(trade_date, 'tushare')
+            if start_date:
+                kwargs['start_date'] = format_date(start_date, 'tushare')
+            if end_date:
+                kwargs['end_date'] = format_date(end_date, 'tushare')
+            if fields:
+                kwargs['fields'] = fields
             
-            logger.info(f"获取股东人数: {ts_code}, {start_date_fmt} - {end_date_fmt}")
+            logger.info(f"获取现货黄金日行情: {kwargs}")
             
-            # 获取股东人数数据
-            df = self.ts_pro.stk_holdernumber(
-                ts_code=ts_code,
-                start_date=start_date_fmt,
-                end_date=end_date_fmt
-            )
-            
-            if df.empty:
-                logger.warning(f"未获取到股东人数数据: {ts_code}")
-                return pd.DataFrame()
-            
-            # 数据处理
-            df = clean_dataframe(df)
-            df = df.sort_values('end_date').reset_index(drop=True)
-            
-            logger.info(f"成功获取 {len(df)} 条股东人数数据")
-            return df
-            
-        except Exception as e:
-            logger.error(f"获取股东人数失败: {e}")
-            raise DataFlowException(f"获取股东人数失败: {e}")
-    
-    def get_concept_detail(self, id: str) -> pd.DataFrame:
-        """
-        获取概念股分类明细
-        
-        Args:
-            id: 概念分类ID
-        
-        Returns:
-            概念股明细DataFrame
-        """
-        if not self.tushare_enabled:
-            raise DataFlowException("Tushare未配置或未启用")
-        
-        try:
-            logger.info(f"获取概念股明细: {id}")
-            
-            # 获取概念股明细
-            df = self.ts_pro.concept_detail(id=id)
+            df = self.ts_pro.sge_daily(**kwargs)
             
             if df.empty:
-                logger.warning(f"未获取到概念股明细: {id}")
+                logger.warning("未获取到现货黄金日行情数据")
                 return pd.DataFrame()
             
-            # 数据处理
-            df = clean_dataframe(df)
-            
-            logger.info(f"成功获取 {len(df)} 条概念股明细")
-            return df
-            
-        except Exception as e:
-            logger.error(f"获取概念股明细失败: {e}")
-            raise DataFlowException(f"获取概念股明细失败: {e}")
-    
-    def get_index_weight(
-        self,
-        index_code: str,
-        start_date: str,
-        end_date: str
-    ) -> pd.DataFrame:
-        """
-        获取指数成分和权重
-        
-        Args:
-            index_code: 指数代码
-            start_date: 开始日期
-            end_date: 结束日期
-        
-        Returns:
-            指数权重DataFrame
-        """
-        if not self.tushare_enabled:
-            raise DataFlowException("Tushare未配置或未启用")
-        
-        try:
-            # 格式化日期
-            start_date_fmt = format_date(start_date, 'tushare')
-            end_date_fmt = format_date(end_date, 'tushare')
-            
-            logger.info(f"获取指数权重: {index_code}, {start_date_fmt} - {end_date_fmt}")
-            
-            # 获取指数权重
-            df = self.ts_pro.index_weight(
-                index_code=index_code,
-                start_date=start_date_fmt,
-                end_date=end_date_fmt
-            )
-            
-            if df.empty:
-                logger.warning(f"未获取到指数权重: {index_code}")
-                return pd.DataFrame()
-            
-            # 数据处理
             df = clean_dataframe(df)
             df = df.sort_values('trade_date').reset_index(drop=True)
             
-            logger.info(f"成功获取 {len(df)} 条指数权重数据")
+            logger.info(f"成功获取 {len(df)} 条现货黄金日行情")
             return df
             
         except Exception as e:
-            logger.error(f"获取指数权重失败: {e}")
-            raise DataFlowException(f"获取指数权重失败: {e}")
+            logger.error(f"获取现货黄金日行情失败: {e}")
+            raise DataFlowException(f"获取现货黄金日行情失败: {e}")
     
-    def get_industry_list(
+    def fetch_fut_daily(
         self,
-        level: str = 'L1',
-        src: str = 'SW2021'
+        ts_code: Optional[str] = None,
+        trade_date: Optional[str] = None,
+        exchange: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        fields: Optional[str] = None
     ) -> pd.DataFrame:
         """
-        获取行业分类列表
+        获取期货日线行情数据
+        
+        覆盖国内五大期货交易所：郑商所(ZCE)、上期所(SHF)、大商所(DCE)、
+        中金所(CFX)、上海能源(INE)、广期所(GFE)。支持原油、黄金、铜、铝、
+        螺纹钢、动力煤等品种。
         
         Args:
-            level: 行业级别，可选值：'L1'(一级行业), 'L2'(二级行业), 'L3'(三级行业)
-            src: 行业分类来源，默认为'SW2021'(申万2021版)
+            ts_code: 合约代码 (如: CU1811.SHF 沪铜, SC2503.INE 原油)
+            trade_date: 交易日期，格式为 YYYYMMDD (如: 20181113)
+            exchange: 交易所代码 DCE/CZCE/SHF/CFFEX/INE/GFEX
+            start_date: 开始日期，格式为 YYYYMMDD
+            end_date: 结束日期，格式为 YYYYMMDD
+            fields: 指定获取的字段，用逗号分隔
+                   可选: ts_code,trade_date,pre_close,pre_settle,open,high,low,
+                         close,settle,change1,change2,vol,amount,oi,oi_chg,delv_settle
         
         Returns:
-            行业分类列表DataFrame
+            pd.DataFrame: 包含以下字段的期货日线行情数据
+                - ts_code (str): TS合约代码
+                - trade_date (str): 交易日期
+                - pre_close (float): 昨收盘价
+                - pre_settle (float): 昨结算价
+                - open (float): 开盘价
+                - high (float): 最高价
+                - low (float): 最低价
+                - close (float): 收盘价
+                - settle (float): 结算价
+                - change1 (float): 涨跌1(收盘价-昨结算价)
+                - change2 (float): 涨跌2(结算价-昨结算价)
+                - vol (float): 成交量(手)
+                - amount (float): 成交金额(万元)
+                - oi (float): 持仓量(手)
+                - oi_chg (float): 持仓量变化
+                - delv_settle (float): 交割结算价
+        
+        Raises:
+            DataFlowException: 当 Tushare 未配置或数据获取失败时
+        
+        Note:
+            - 单次最大 2000 条，总量不限制
+            - 用户需要至少 2000 积分才可以调取
         """
         if not self.tushare_enabled:
             raise DataFlowException("Tushare未配置或未启用")
         
         try:
-            logger.info(f"获取行业分类列表: level={level}, src={src}")
+            kwargs: Dict[str, Any] = {}
+            if ts_code:
+                kwargs['ts_code'] = ts_code
+            if trade_date:
+                kwargs['trade_date'] = format_date(trade_date, 'tushare')
+            if exchange:
+                kwargs['exchange'] = exchange
+            if start_date:
+                kwargs['start_date'] = format_date(start_date, 'tushare')
+            if end_date:
+                kwargs['end_date'] = format_date(end_date, 'tushare')
+            if fields:
+                kwargs['fields'] = fields
             
-            # 获取行业分类列表
-            df = self.ts_pro.index_classify(level=level, src=src)
+            logger.info(f"获取期货日线行情: {kwargs}")
+            
+            df = self.ts_pro.fut_daily(**kwargs)
             
             if df.empty:
-                logger.warning(f"未获取到行业分类列表: level={level}, src={src}")
+                logger.warning("未获取到期货日线行情数据")
                 return pd.DataFrame()
             
-            # 数据处理
             df = clean_dataframe(df)
+            df = df.sort_values('trade_date').reset_index(drop=True)
             
-            level_name = {'L1': '一级行业', 'L2': '二级行业', 'L3': '三级行业'}.get(level, level)
-            logger.info(f"成功获取 {len(df)} 条申万{level_name}分类数据")
+            logger.info(f"成功获取 {len(df)} 条期货日线行情")
             return df
             
         except Exception as e:
-            logger.error(f"获取行业分类列表失败: {e}")
-            raise DataFlowException(f"获取行业分类列表失败: {e}")
+            logger.error(f"获取期货日线行情失败: {e}")
+            raise DataFlowException(f"获取期货日线行情失败: {e}")
     
-    def get_industry_members(
+    def fetch_yahoo_index_daily(
         self,
-        l1_code: str = None,
-        l2_code: str = None,
-        l3_code: str = None,
-        is_new: str = 'Y'
+        symbol: str,
+        start_date: str,
+        end_date: str,
+        period: str = 'daily',
+        session: Optional[Any] = None
     ) -> pd.DataFrame:
         """
-        获取行业成分股
+        通过雅虎财经(yfinance)获取美股指数日线行情。
+        
+        数据来源 Yahoo Finance，国内网络可能需要代理。常用指数代码：
+        - ^GSPC: 标普500, ^IXIC: 纳斯达克综合, ^DJI: 道琼斯工业
+        也可使用 YAHOO_INDEX_SYMBOLS 中的别名，如 'SP500', 'NASDAQ', 'DJI'。
         
         Args:
-            l1_code: 一级行业代码
-            l2_code: 二级行业代码
-            l3_code: 三级行业代码
-            is_new: 是否最新，默认为'Y'（是）
+            symbol: 雅虎指数代码 (如 ^GSPC) 或别名 (如 SP500, NASDAQ, DJI)
+            start_date: 开始日期，支持 YYYYMMDD 或 YYYY-MM-DD
+            end_date: 结束日期，支持 YYYYMMDD 或 YYYY-MM-DD
+            period: 周期 'daily' | 'weekly' | 'monthly'
+            session: 可选，requests.Session 实例，用于设置代理等
         
         Returns:
-            行业成分股DataFrame
-        """
-        if not self.tushare_enabled:
-            raise DataFlowException("Tushare未配置或未启用")
+            pd.DataFrame: 列包括 trade_date, open, high, low, close, vol
+                (日期已转为 YYYYMMDD 字符串，列名小写与内部接口一致)
         
-        try:
-            logger.info(f"获取行业成分股: l1_code={l1_code}, l2_code={l2_code}, l3_code={l3_code}")
-            
-            # 获取行业成分股
-            df = self.ts_pro.index_member_all(
-                l1_code=l1_code,
-                l2_code=l2_code,
-                l3_code=l3_code,
-                is_new=is_new
+        Raises:
+            DataFlowException: 未启用雅虎数据、未安装 yfinance 或拉取失败时
+        """
+        if not self.yahoo_enabled or not YFINANCE_AVAILABLE:
+            raise DataFlowException(
+                "雅虎财经未启用或未安装 yfinance，请安装: pip install yfinance，并在 config 中启用 yahoo_finance"
             )
-            
-            if df.empty:
-                logger.warning(f"未获取到行业成分股: l1_code={l1_code}, l2_code={l2_code}, l3_code={l3_code}")
-                return pd.DataFrame()
-            
-            # 数据处理
-            df = clean_dataframe(df)
-            
-            logger.info(f"成功获取 {len(df)} 条行业成分股数据")
-            return df
-            
-        except Exception as e:
-            logger.error(f"获取行业成分股失败: {e}")
-            raise DataFlowException(f"获取行业成分股失败: {e}")
-    
-    def get_stock_industry(
-        self,
-        ts_code: str,
-        is_new: str = 'Y'
-    ) -> pd.DataFrame:
-        """
-        查询个股所属行业
-        
-        Args:
-            ts_code: 股票代码
-            is_new: 是否最新，默认为'Y'（是）
-        
-        Returns:
-            个股所属行业DataFrame
-        """
-        if not self.tushare_enabled:
-            raise DataFlowException("Tushare未配置或未启用")
-        
+        symbol = symbol.strip().upper()
+        symbol = YAHOO_INDEX_SYMBOLS.get(symbol, symbol)
+        if not symbol.startswith('^'):
+            symbol = '^' + symbol
+        start_s = format_date(start_date, 'tushare')
+        end_s = format_date(end_date, 'tushare')
+        start_d = f"{start_s[:4]}-{start_s[4:6]}-{start_s[6:8]}"
+        end_d = f"{end_s[:4]}-{end_s[4:6]}-{end_s[6:8]}"
+        interval_map = {'daily': '1d', 'weekly': '1wk', 'monthly': '1mo'}
+        interval = interval_map.get(period, '1d')
         try:
-            logger.info(f"查询个股所属行业: {ts_code}")
-            
-            # 查询个股所属行业
-            df = self.ts_pro.index_member_all(
-                ts_code=ts_code,
-                is_new=is_new
+            logger.info(f"雅虎指数行情: symbol={symbol}, {start_d} ~ {end_d}, period={period}")
+            df = yf.download(
+                symbol,
+                start=start_d,
+                end=end_d,
+                interval=interval,
+                progress=False,
+                session=session,
+                auto_adjust=True,
             )
-            
-            if df.empty:
-                logger.warning(f"未获取到个股所属行业: {ts_code}")
+            if df is None or df.empty:
+                logger.warning(f"未获取到雅虎指数数据: {symbol}")
                 return pd.DataFrame()
-            
-            # 数据处理
-            df = clean_dataframe(df)
-            
-            logger.info(f"成功获取 {ts_code} 的行业分类信息")
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            df = df.rename(columns={
+                'Open': 'open', 'High': 'high', 'Low': 'low',
+                'Close': 'close', 'Volume': 'vol'
+            })
+            df = df.reset_index()
+            date_col = 'Date' if 'Date' in df.columns else df.columns[0]
+            df = df.rename(columns={date_col: 'trade_date'})
+            df['trade_date'] = pd.to_datetime(df['trade_date']).dt.strftime('%Y%m%d')
+            for col in ['open', 'high', 'low', 'close', 'vol']:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+            out_cols = [c for c in ['trade_date', 'open', 'high', 'low', 'close', 'vol'] if c in df.columns]
+            df = df[out_cols].sort_values('trade_date').reset_index(drop=True)
+            logger.info(f"成功获取 {len(df)} 条雅虎指数行情")
             return df
-            
         except Exception as e:
-            logger.error(f"查询个股所属行业失败: {e}")
-            raise DataFlowException(f"查询个股所属行业失败: {e}")
+            logger.error(f"获取雅虎指数行情失败: {e}")
+            raise DataFlowException(f"获取雅虎指数行情失败: {e}")
     
-    def get_shibor_lpr(
+    def fetch_shibor_lpr(
         self,
         start_date: str,
         end_date: str,
@@ -702,7 +620,7 @@ class MarketDataFetcher:
             logger.error(f"获取LPR利率数据失败: {e}")
             raise DataFlowException(f"获取LPR利率数据失败: {e}")
     
-    def get_cpi(
+    def fetch_cpi(
         self,
         start_m: str = None,
         end_m: str = None,
@@ -757,7 +675,7 @@ class MarketDataFetcher:
             logger.error(f"获取CPI数据失败: {e}")
             raise DataFlowException(f"获取CPI数据失败: {e}")
     
-    def get_sf_month(
+    def fetch_sf_month(
         self,
         start_m: str = None,
         end_m: str = None,
@@ -803,130 +721,104 @@ class MarketDataFetcher:
             raise DataFlowException(f"获取社融数据失败: {e}")
     
 
-# 便捷函数
-def get_money_flow(
+# 便捷函数（远程获取）
+def fetch_stock_basic(
+    ts_code: str = None,
+    name: str = None,
+    market: str = None,
+    list_status: str = 'L',
+    exchange: str = None,
+    is_hs: str = None,
+    fields: str = None
+) -> pd.DataFrame:
+    """
+    获取股票基础信息的便捷函数（远程）
+    
+    Args:
+        ts_code: TS股票代码
+        name: 名称
+        market: 市场类别（主板/创业板/科创板/CDR/北交所）
+        list_status: 上市状态 L上市 D退市 P暂停上市 G过会未交易，默认是L
+        exchange: 交易所 SSE上交所 SZSE深交所 BSE北交所
+        is_hs: 是否沪深港通标的，N否 H沪股通 S深股通
+        fields: 需要获取的字段，如 'ts_code,symbol,name,area,industry,list_date'
+    
+    Returns:
+        基础信息DataFrame
+    
+    Example:
+        >>> df = fetch_stock_basic(exchange='', list_status='L', fields='ts_code,symbol,name,area,industry,list_date')
+        >>> df = fetch_stock_basic(ts_code='000001.SZ')
+    """
+    fetcher = MarketDataFetcher()
+    return fetcher.fetch_stock_basic(ts_code, name, market, list_status, exchange, is_hs, fields)
+
+
+def fetch_money_flow(
     ts_code: str,
     start_date: str,
     end_date: str
 ) -> pd.DataFrame:
     """
-    获取资金流向的便捷函数
+    获取资金流向的便捷函数（远程）
     """
     fetcher = MarketDataFetcher()
-    return fetcher.get_money_flow(ts_code, start_date, end_date)
+    return fetcher.fetch_money_flow(ts_code, start_date, end_date)
 
 
-def get_margin_detail(
+def fetch_margin_detail(
     trade_date: str,
     ts_code: str = None
 ) -> pd.DataFrame:
     """
-    获取融资融券明细的便捷函数
+    获取融资融券明细的便捷函数（远程）
     """
     fetcher = MarketDataFetcher()
-    return fetcher.get_margin_detail(trade_date, ts_code)
+    return fetcher.fetch_margin_detail(trade_date, ts_code)
 
 
-def get_dragon_tiger_list(
+def fetch_dragon_tiger_list(
     trade_date: str,
     ts_code: str = None
 ) -> pd.DataFrame:
     """
-    获取龙虎榜的便捷函数
+    获取龙虎榜的便捷函数（远程）
     """
     fetcher = MarketDataFetcher()
-    return fetcher.get_dragon_tiger_list(trade_date, ts_code)
+    return fetcher.fetch_dragon_tiger_list(trade_date, ts_code)
 
 
-def get_top10_holders(
+def fetch_top10_holders(
     ts_code: str,
     period: str,
     ann_date: str = None
 ) -> pd.DataFrame:
     """
-    获取前十大股东的便捷函数
+    获取前十大股东的便捷函数（远程）
     """
     fetcher = MarketDataFetcher()
-    return fetcher.get_top10_holders(ts_code, period, ann_date)
+    return fetcher.fetch_top10_holders(ts_code, period, ann_date)
 
 
-def get_block_trade(
+def fetch_block_trade(
     ts_code: str,
     start_date: str,
     end_date: str
 ) -> pd.DataFrame:
     """
-    获取大宗交易的便捷函数
+    获取大宗交易的便捷函数（远程）
     """
     fetcher = MarketDataFetcher()
-    return fetcher.get_block_trade(ts_code, start_date, end_date)
+    return fetcher.fetch_block_trade(ts_code, start_date, end_date)
 
 
-def get_industry_list(
-    level: str = 'L1',
-    src: str = 'SW2021'
-) -> pd.DataFrame:
-    """
-    获取行业分类列表的便捷函数
-    
-    Args:
-        level: 行业级别，可选值：'L1'(一级行业), 'L2'(二级行业), 'L3'(三级行业)
-        src: 行业分类来源，默认为'SW2021'(申万2021版)
-    
-    Returns:
-        行业分类列表DataFrame
-    """
-    fetcher = MarketDataFetcher()
-    return fetcher.get_industry_list(level, src)
-
-
-def get_industry_members(
-    l1_code: str = None,
-    l2_code: str = None,
-    l3_code: str = None,
-    is_new: str = 'Y'
-) -> pd.DataFrame:
-    """
-    获取行业成分股的便捷函数
-    
-    Args:
-        l1_code: 一级行业代码
-        l2_code: 二级行业代码
-        l3_code: 三级行业代码
-        is_new: 是否最新，默认为'Y'（是）
-    
-    Returns:
-        行业成分股DataFrame
-    """
-    fetcher = MarketDataFetcher()
-    return fetcher.get_industry_members(l1_code, l2_code, l3_code, is_new)
-
-
-def get_stock_industry(
-    ts_code: str,
-    is_new: str = 'Y'
-) -> pd.DataFrame:
-    """
-    查询个股所属行业的便捷函数
-    
-    Args:
-        ts_code: 股票代码
-        is_new: 是否最新，默认为'Y'（是）
-    
-    Returns:
-        个股所属行业DataFrame
-    """
-    fetcher = MarketDataFetcher()
-    return fetcher.get_stock_industry(ts_code, is_new)
-
-
-def get_shibor_lpr(
+def fetch_shibor_lpr(
     start_date: str,
     end_date: str,
     fields: str = None
 ) -> pd.DataFrame:
     """
-    获取贷款市场报价利率(LPR)数据的便捷函数
+    获取贷款市场报价利率(LPR)数据的便捷函数（远程）
     
     Args:
         start_date: 开始日期
@@ -937,21 +829,21 @@ def get_shibor_lpr(
         LPR利率DataFrame
     
     Example:
-        >>> df = get_shibor_lpr('20180101', '20181130', 'date,1y')
-        >>> df = get_shibor_lpr('20180101', '20181130')
+        >>> df = fetch_shibor_lpr('20180101', '20181130', 'date,1y')
+        >>> df = fetch_shibor_lpr('20180101', '20181130')
     """
     fetcher = MarketDataFetcher()
-    return fetcher.get_shibor_lpr(start_date, end_date, fields)
+    return fetcher.fetch_shibor_lpr(start_date, end_date, fields)
 
 
-def get_cpi(
+def fetch_cpi(
     start_m: str = None,
     end_m: str = None,
     m: str = None,
     fields: str = None
 ) -> pd.DataFrame:
     """
-    获取居民消费价格指数(CPI)数据的便捷函数
+    获取居民消费价格指数(CPI)数据的便捷函数（远程）
     
     Args:
         start_m: 开始月份（YYYYMM）
@@ -963,21 +855,21 @@ def get_cpi(
         CPI数据DataFrame，包含全国、城市和农村的CPI数据
     
     Example:
-        >>> df = get_cpi(start_m='201801', end_m='201903')
-        >>> df = get_cpi(start_m='201801', end_m='201903', fields='month,nt_val,nt_yoy')
-        >>> df = get_cpi(m='201801,201802,201803')
+        >>> df = fetch_cpi(start_m='201801', end_m='201903')
+        >>> df = fetch_cpi(start_m='201801', end_m='201903', fields='month,nt_val,nt_yoy')
+        >>> df = fetch_cpi(m='201801,201802,201803')
     """
     fetcher = MarketDataFetcher()
-    return fetcher.get_cpi(start_m, end_m, m, fields)
+    return fetcher.fetch_cpi(start_m, end_m, m, fields)
 
 
-def get_sf_month(
+def fetch_sf_month(
     start_m: str = None,
     end_m: str = None,
     m: str = None
 ) -> pd.DataFrame:
     """
-    获取月度社会融资数据的便捷函数
+    获取月度社会融资数据的便捷函数（远程）
     
     Args:
         start_m: 开始月份（YYYYMM）
@@ -988,9 +880,9 @@ def get_sf_month(
         社融数据DataFrame，包含社融增量和存量数据
     
     Example:
-        >>> df = get_sf_month(start_m='201901', end_m='202307')
-        >>> df = get_sf_month(m='201901,201902,201903')
+        >>> df = fetch_sf_month(start_m='201901', end_m='202307')
+        >>> df = fetch_sf_month(m='201901,201902,201903')
     """
     fetcher = MarketDataFetcher()
-    return fetcher.get_sf_month(start_m, end_m, m)
+    return fetcher.fetch_sf_month(start_m, end_m, m)
 

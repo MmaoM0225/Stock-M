@@ -27,7 +27,7 @@ class KLineDataFetcher:
             ts.set_token(DATA_SOURCES['tushare']['token'])
             self.ts_pro = ts.pro_api()
     
-    def get_daily_data(
+    def fetch_daily_data(
         self,
         ts_code: str,
         start_date: str,
@@ -135,7 +135,7 @@ class KLineDataFetcher:
             logger.error(f"获取日线数据失败: {e}")
             raise DataFlowException(f"获取日线数据失败: {e}")
     
-    def get_weekly_data(
+    def fetch_weekly_data(
         self,
         ts_code: str,
         start_date: str,
@@ -200,7 +200,7 @@ class KLineDataFetcher:
             logger.error(f"获取周线数据失败: {e}")
             raise DataFlowException(f"获取周线数据失败: {e}")
     
-    def get_monthly_data(
+    def fetch_monthly_data(
         self,
         ts_code: str,
         start_date: str,
@@ -265,3 +265,77 @@ class KLineDataFetcher:
             logger.error(f"获取月线数据失败: {e}")
             raise DataFlowException(f"获取月线数据失败: {e}")
     
+    def fetch_index_daily_data(
+        self,
+        ts_code: str,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        trade_date: Optional[str] = None
+    ) -> pd.DataFrame:
+        """
+        获取指数日线行情数据
+        
+        使用 Tushare index_daily 接口，单次调取最多 8000 行记录，
+        可通过 start_date 和 end_date 分批次补全数据。
+        
+        Args:
+            ts_code: 指数代码，来源指数基础信息接口 (如: 399300.SZ 沪深300, 399001.SZ 深证成指)
+            start_date: 开始日期，格式为 YYYYMMDD 或 YYYY-MM-DD
+            end_date: 结束日期，格式为 YYYYMMDD 或 YYYY-MM-DD
+            trade_date: 交易日期，与 start_date/end_date 二选一 (如: 20180903)
+        
+        Returns:
+            pd.DataFrame: 包含以下字段的指数日线行情数据
+                - ts_code (str): 指数代码
+                - trade_date (str): 交易日
+                - open (float): 开盘点位
+                - high (float): 最高点位
+                - low (float): 最低点位
+                - close (float): 收盘点位
+                - pre_close (float): 昨日收盘点
+                - change (float): 涨跌点
+                - pct_chg (float): 涨跌幅（%）
+                - vol (float): 成交量（手）
+                - amount (float): 成交额（千元）
+        
+        Raises:
+            DataFlowException: 当 Tushare 未配置或数据获取失败时
+        
+        Note:
+            - 用户累积 2000 积分可调取，5000 积分以上频次较高
+            - 本接口不包括申万行情数据，申万等行业指数需 5000 积分以上
+            - 深证成指(399001.SZ)仅包含 500 只成分股；深证A指(399107.SZ)反映深市所有 A 股成交
+        """
+        if not self.tushare_enabled:
+            raise DataFlowException("Tushare未配置或未启用")
+        
+        if not ts_code or '.' not in ts_code:
+            raise DataFlowException(f"无效的指数代码: {ts_code}")
+        
+        try:
+            kwargs: Dict[str, str] = {'ts_code': ts_code}
+            if trade_date:
+                kwargs['trade_date'] = format_date(trade_date, 'tushare')
+            else:
+                if start_date:
+                    kwargs['start_date'] = format_date(start_date, 'tushare')
+                if end_date:
+                    kwargs['end_date'] = format_date(end_date, 'tushare')
+            
+            logger.info(f"获取指数日线数据: {ts_code}, params={kwargs}")
+            
+            df = self.ts_pro.index_daily(**kwargs)
+            
+            if df.empty:
+                logger.warning(f"未获取到指数日线数据: {ts_code}")
+                return pd.DataFrame()
+            
+            df = clean_dataframe(df)
+            df = df.sort_values('trade_date').reset_index(drop=True)
+            
+            logger.info(f"成功获取 {len(df)} 条指数日线数据")
+            return df
+            
+        except Exception as e:
+            logger.error(f"获取指数日线数据失败: {e}")
+            raise DataFlowException(f"获取指数日线数据失败: {e}")
