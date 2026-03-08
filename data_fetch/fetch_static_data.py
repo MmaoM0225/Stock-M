@@ -32,7 +32,7 @@ def fetch_stock_list(file_path: str = "data/stock_list.json") -> pd.DataFrame:
         logger.info("=" * 50)
         
         fetcher = MarketDataFetcher()
-        df = fetcher.get_stock_basic(
+        df = fetcher.fetch_stock_basic(
             exchange='',
             list_status='L',
             fields='ts_code,symbol,name,area,industry,market,list_date'

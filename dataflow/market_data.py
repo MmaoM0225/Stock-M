@@ -45,7 +45,7 @@ class MarketDataFetcher:
         self.akshare_enabled = DATA_SOURCES['akshare']['enabled']
         self.yahoo_enabled = DATA_SOURCES['yahoo_finance']['enabled'] and YFINANCE_AVAILABLE
     
-    def get_stock_basic(
+    def fetch_stock_basic(
         self,
         ts_code: str = None,
         name: str = None,
@@ -107,7 +107,7 @@ class MarketDataFetcher:
             logger.error(f"获取股票基础信息失败: {e}")
             raise DataFlowException(f"获取股票基础信息失败: {e}")
     
-    def get_money_flow(
+    def fetch_money_flow(
         self,
         ts_code: str,
         start_date: str,
@@ -156,7 +156,7 @@ class MarketDataFetcher:
             logger.error(f"获取资金流向失败: {e}")
             raise DataFlowException(f"获取资金流向失败: {e}")
     
-    def get_margin_detail(
+    def fetch_margin_detail(
         self,
         trade_date: str,
         ts_code: str = None
@@ -200,7 +200,7 @@ class MarketDataFetcher:
             logger.error(f"获取融资融券明细失败: {e}")
             raise DataFlowException(f"获取融资融券明细失败: {e}")
     
-    def get_margin_target(self, ts_code: str = None) -> pd.DataFrame:
+    def fetch_margin_target(self, ts_code: str = None) -> pd.DataFrame:
         """
         获取融资融券标的
         
@@ -233,7 +233,7 @@ class MarketDataFetcher:
             logger.error(f"获取融资融券标的失败: {e}")
             raise DataFlowException(f"获取融资融券标的失败: {e}")
     
-    def get_index_dailybasic(
+    def fetch_index_dailybasic(
         self,
         ts_code: Optional[str] = None,
         trade_date: Optional[str] = None,
@@ -317,7 +317,7 @@ class MarketDataFetcher:
             logger.error(f"获取大盘指数每日指标失败: {e}")
             raise DataFlowException(f"获取大盘指数每日指标失败: {e}")
     
-    def get_sge_daily(
+    def fetch_sge_daily(
         self,
         ts_code: Optional[str] = None,
         trade_date: Optional[str] = None,
@@ -399,7 +399,7 @@ class MarketDataFetcher:
             logger.error(f"获取现货黄金日行情失败: {e}")
             raise DataFlowException(f"获取现货黄金日行情失败: {e}")
     
-    def get_fut_daily(
+    def fetch_fut_daily(
         self,
         ts_code: Optional[str] = None,
         trade_date: Optional[str] = None,
@@ -487,7 +487,7 @@ class MarketDataFetcher:
             logger.error(f"获取期货日线行情失败: {e}")
             raise DataFlowException(f"获取期货日线行情失败: {e}")
     
-    def get_yahoo_index_daily(
+    def fetch_yahoo_index_daily(
         self,
         symbol: str,
         start_date: str,
@@ -565,7 +565,7 @@ class MarketDataFetcher:
             logger.error(f"获取雅虎指数行情失败: {e}")
             raise DataFlowException(f"获取雅虎指数行情失败: {e}")
     
-    def get_shibor_lpr(
+    def fetch_shibor_lpr(
         self,
         start_date: str,
         end_date: str,
@@ -620,7 +620,7 @@ class MarketDataFetcher:
             logger.error(f"获取LPR利率数据失败: {e}")
             raise DataFlowException(f"获取LPR利率数据失败: {e}")
     
-    def get_cpi(
+    def fetch_cpi(
         self,
         start_m: str = None,
         end_m: str = None,
@@ -675,7 +675,7 @@ class MarketDataFetcher:
             logger.error(f"获取CPI数据失败: {e}")
             raise DataFlowException(f"获取CPI数据失败: {e}")
     
-    def get_sf_month(
+    def fetch_sf_month(
         self,
         start_m: str = None,
         end_m: str = None,
@@ -721,8 +721,8 @@ class MarketDataFetcher:
             raise DataFlowException(f"获取社融数据失败: {e}")
     
 
-# 便捷函数
-def get_stock_basic(
+# 便捷函数（远程获取）
+def fetch_stock_basic(
     ts_code: str = None,
     name: str = None,
     market: str = None,
@@ -732,7 +732,7 @@ def get_stock_basic(
     fields: str = None
 ) -> pd.DataFrame:
     """
-    获取股票基础信息的便捷函数
+    获取股票基础信息的便捷函数（远程）
     
     Args:
         ts_code: TS股票代码
@@ -747,78 +747,78 @@ def get_stock_basic(
         基础信息DataFrame
     
     Example:
-        >>> df = get_stock_basic(exchange='', list_status='L', fields='ts_code,symbol,name,area,industry,list_date')
-        >>> df = get_stock_basic(ts_code='000001.SZ')
+        >>> df = fetch_stock_basic(exchange='', list_status='L', fields='ts_code,symbol,name,area,industry,list_date')
+        >>> df = fetch_stock_basic(ts_code='000001.SZ')
     """
     fetcher = MarketDataFetcher()
-    return fetcher.get_stock_basic(ts_code, name, market, list_status, exchange, is_hs, fields)
+    return fetcher.fetch_stock_basic(ts_code, name, market, list_status, exchange, is_hs, fields)
 
 
-def get_money_flow(
+def fetch_money_flow(
     ts_code: str,
     start_date: str,
     end_date: str
 ) -> pd.DataFrame:
     """
-    获取资金流向的便捷函数
+    获取资金流向的便捷函数（远程）
     """
     fetcher = MarketDataFetcher()
-    return fetcher.get_money_flow(ts_code, start_date, end_date)
+    return fetcher.fetch_money_flow(ts_code, start_date, end_date)
 
 
-def get_margin_detail(
+def fetch_margin_detail(
     trade_date: str,
     ts_code: str = None
 ) -> pd.DataFrame:
     """
-    获取融资融券明细的便捷函数
+    获取融资融券明细的便捷函数（远程）
     """
     fetcher = MarketDataFetcher()
-    return fetcher.get_margin_detail(trade_date, ts_code)
+    return fetcher.fetch_margin_detail(trade_date, ts_code)
 
 
-def get_dragon_tiger_list(
+def fetch_dragon_tiger_list(
     trade_date: str,
     ts_code: str = None
 ) -> pd.DataFrame:
     """
-    获取龙虎榜的便捷函数
+    获取龙虎榜的便捷函数（远程）
     """
     fetcher = MarketDataFetcher()
-    return fetcher.get_dragon_tiger_list(trade_date, ts_code)
+    return fetcher.fetch_dragon_tiger_list(trade_date, ts_code)
 
 
-def get_top10_holders(
+def fetch_top10_holders(
     ts_code: str,
     period: str,
     ann_date: str = None
 ) -> pd.DataFrame:
     """
-    获取前十大股东的便捷函数
+    获取前十大股东的便捷函数（远程）
     """
     fetcher = MarketDataFetcher()
-    return fetcher.get_top10_holders(ts_code, period, ann_date)
+    return fetcher.fetch_top10_holders(ts_code, period, ann_date)
 
 
-def get_block_trade(
+def fetch_block_trade(
     ts_code: str,
     start_date: str,
     end_date: str
 ) -> pd.DataFrame:
     """
-    获取大宗交易的便捷函数
+    获取大宗交易的便捷函数（远程）
     """
     fetcher = MarketDataFetcher()
-    return fetcher.get_block_trade(ts_code, start_date, end_date)
+    return fetcher.fetch_block_trade(ts_code, start_date, end_date)
 
 
-def get_shibor_lpr(
+def fetch_shibor_lpr(
     start_date: str,
     end_date: str,
     fields: str = None
 ) -> pd.DataFrame:
     """
-    获取贷款市场报价利率(LPR)数据的便捷函数
+    获取贷款市场报价利率(LPR)数据的便捷函数（远程）
     
     Args:
         start_date: 开始日期
@@ -829,21 +829,21 @@ def get_shibor_lpr(
         LPR利率DataFrame
     
     Example:
-        >>> df = get_shibor_lpr('20180101', '20181130', 'date,1y')
-        >>> df = get_shibor_lpr('20180101', '20181130')
+        >>> df = fetch_shibor_lpr('20180101', '20181130', 'date,1y')
+        >>> df = fetch_shibor_lpr('20180101', '20181130')
     """
     fetcher = MarketDataFetcher()
-    return fetcher.get_shibor_lpr(start_date, end_date, fields)
+    return fetcher.fetch_shibor_lpr(start_date, end_date, fields)
 
 
-def get_cpi(
+def fetch_cpi(
     start_m: str = None,
     end_m: str = None,
     m: str = None,
     fields: str = None
 ) -> pd.DataFrame:
     """
-    获取居民消费价格指数(CPI)数据的便捷函数
+    获取居民消费价格指数(CPI)数据的便捷函数（远程）
     
     Args:
         start_m: 开始月份（YYYYMM）
@@ -855,21 +855,21 @@ def get_cpi(
         CPI数据DataFrame，包含全国、城市和农村的CPI数据
     
     Example:
-        >>> df = get_cpi(start_m='201801', end_m='201903')
-        >>> df = get_cpi(start_m='201801', end_m='201903', fields='month,nt_val,nt_yoy')
-        >>> df = get_cpi(m='201801,201802,201803')
+        >>> df = fetch_cpi(start_m='201801', end_m='201903')
+        >>> df = fetch_cpi(start_m='201801', end_m='201903', fields='month,nt_val,nt_yoy')
+        >>> df = fetch_cpi(m='201801,201802,201803')
     """
     fetcher = MarketDataFetcher()
-    return fetcher.get_cpi(start_m, end_m, m, fields)
+    return fetcher.fetch_cpi(start_m, end_m, m, fields)
 
 
-def get_sf_month(
+def fetch_sf_month(
     start_m: str = None,
     end_m: str = None,
     m: str = None
 ) -> pd.DataFrame:
     """
-    获取月度社会融资数据的便捷函数
+    获取月度社会融资数据的便捷函数（远程）
     
     Args:
         start_m: 开始月份（YYYYMM）
@@ -880,9 +880,9 @@ def get_sf_month(
         社融数据DataFrame，包含社融增量和存量数据
     
     Example:
-        >>> df = get_sf_month(start_m='201901', end_m='202307')
-        >>> df = get_sf_month(m='201901,201902,201903')
+        >>> df = fetch_sf_month(start_m='201901', end_m='202307')
+        >>> df = fetch_sf_month(m='201901,201902,201903')
     """
     fetcher = MarketDataFetcher()
-    return fetcher.get_sf_month(start_m, end_m, m)
+    return fetcher.fetch_sf_month(start_m, end_m, m)
 

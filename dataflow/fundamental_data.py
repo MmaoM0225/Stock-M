@@ -27,7 +27,7 @@ class FundamentalDataFetcher:
             ts.set_token(DATA_SOURCES['tushare']['token'])
             self.ts_pro = ts.pro_api()
     
-    def get_company_info(
+    def fetch_company_info(
         self, 
         ts_code: str, 
         fields: str = None
@@ -99,7 +99,7 @@ class FundamentalDataFetcher:
             logger.error(f"获取公司基础信息失败: {e}")
             raise DataFlowException(f"获取公司基础信息失败: {e}")
     
-    def get_daily_basic(
+    def fetch_daily_basic(
         self,
         ts_code: str = None,
         trade_date: str = None,
@@ -197,7 +197,7 @@ class FundamentalDataFetcher:
             logger.error(f"获取每日基本面指标失败: {e}")
             raise DataFlowException(f"获取每日基本面指标失败: {e}")
     
-    def get_income_statement(
+    def fetch_income_statement(
         self,
         ts_code: str,
         ann_date: str = None,
@@ -313,7 +313,7 @@ class FundamentalDataFetcher:
             logger.error(f"获取利润表数据失败: {e}")
             raise DataFlowException(f"获取利润表数据失败: {e}")
     
-    def get_balance_sheet(
+    def fetch_balance_sheet(
         self,
         ts_code: str,
         ann_date: str = None,
@@ -434,7 +434,7 @@ class FundamentalDataFetcher:
             logger.error(f"获取资产负债表数据失败: {e}")
             raise DataFlowException(f"获取资产负债表数据失败: {e}")
     
-    def get_cashflow_statement(
+    def fetch_cashflow_statement(
         self,
         ts_code: str,
         ann_date: str = None,
@@ -568,7 +568,7 @@ class FundamentalDataFetcher:
             logger.error(f"获取现金流量表数据失败: {e}")
             raise DataFlowException(f"获取现金流量表数据失败: {e}")
     
-    def get_financial_indicators(
+    def fetch_financial_indicators(
         self,
         ts_code: str,
         ann_date: str = None,

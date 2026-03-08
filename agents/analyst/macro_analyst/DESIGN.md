@@ -4,9 +4,9 @@
 
 | 维度 | 分析内容 | 数据来源（dataflow 已有接口） |
 |------|----------|------------------------------|
-| **货币环境** | LPR、CPI、社融 | `MarketDataFetcher.get_shibor_lpr()`、`get_cpi()`、`get_sf_month()` |
-| **全球环境** | 美股趋势（可选）、大宗商品 | 美股：`get_yahoo_index_daily()`（SP500/NASDAQ/DJI）；大宗：`get_sge_daily()`（黄金）、`get_fut_daily()`（原油等期货） |
-| **市场本身** | A 股、指数趋势、成交额、波动率等 | 指数日线：`KLineDataFetcher.get_index_daily_data()`；指数每日指标：`get_index_dailybasic()`（换手、市值等）；成交额/成交量在 index_daily 的 amount/vol；波动率由日线 close 计算 |
+| **货币环境** | LPR、CPI、社融 | `MarketDataFetcher.fetch_shibor_lpr()`、`fetch_cpi()`、`fetch_sf_month()` |
+| **全球环境** | 美股趋势（可选）、大宗商品 | 美股：`fetch_yahoo_index_daily()`（SP500/NASDAQ/DJI）；大宗：`fetch_sge_daily()`（黄金）、`fetch_fut_daily()`（原油等期货） |
+| **市场本身** | A 股、指数趋势、成交额、波动率等 | 指数日线：`KLineDataFetcher.fetch_index_daily_data()`；指数每日指标：`fetch_index_dailybasic()`（换手、市值等）；成交额/成交量在 index_daily 的 amount/vol；波动率由日线 close 计算 |
 
 ---
 

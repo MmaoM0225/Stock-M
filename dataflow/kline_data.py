@@ -27,7 +27,7 @@ class KLineDataFetcher:
             ts.set_token(DATA_SOURCES['tushare']['token'])
             self.ts_pro = ts.pro_api()
     
-    def get_daily_data(
+    def fetch_daily_data(
         self,
         ts_code: str,
         start_date: str,
@@ -135,7 +135,7 @@ class KLineDataFetcher:
             logger.error(f"获取日线数据失败: {e}")
             raise DataFlowException(f"获取日线数据失败: {e}")
     
-    def get_weekly_data(
+    def fetch_weekly_data(
         self,
         ts_code: str,
         start_date: str,
@@ -200,7 +200,7 @@ class KLineDataFetcher:
             logger.error(f"获取周线数据失败: {e}")
             raise DataFlowException(f"获取周线数据失败: {e}")
     
-    def get_monthly_data(
+    def fetch_monthly_data(
         self,
         ts_code: str,
         start_date: str,
@@ -265,7 +265,7 @@ class KLineDataFetcher:
             logger.error(f"获取月线数据失败: {e}")
             raise DataFlowException(f"获取月线数据失败: {e}")
     
-    def get_index_daily_data(
+    def fetch_index_daily_data(
         self,
         ts_code: str,
         start_date: Optional[str] = None,
