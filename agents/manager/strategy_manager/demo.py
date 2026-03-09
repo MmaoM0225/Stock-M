@@ -3,8 +3,8 @@
 
 流程：并行运行 macro_analyst + news_analyst → strategy_manager 综合
 
-    python -m agents.analyst.strategy_manager.demo
-    python -m agents.analyst.strategy_manager.demo 20260305
+    python -m agents.manager.strategy_manager.demo
+    python -m agents.manager.strategy_manager.demo 20260305
 """
 
 import argparse

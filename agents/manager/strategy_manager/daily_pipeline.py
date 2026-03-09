@@ -9,10 +9,10 @@ from typing import Dict, Any, Optional, TypedDict
 from langgraph.constants import Send
 from langgraph.graph import StateGraph, START, END
 
-from ..macro_analyst.graph import create_macro_graph
-from ..macro_analyst.node import _write_macro_analysis_md
-from ..news_analyst.graph import create_news_graph
-from ..news_analyst.node import _write_news_analysis_md
+from ...analyst.macro_analyst.graph import create_macro_graph
+from ...analyst.macro_analyst.node import _write_macro_analysis_md
+from ...analyst.news_analyst.graph import create_news_graph
+from ...analyst.news_analyst.node import _write_news_analysis_md
 from .graph import create_strategy_graph
 
 

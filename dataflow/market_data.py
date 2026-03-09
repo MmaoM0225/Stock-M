@@ -233,6 +233,16 @@ class MarketDataFetcher:
             logger.error(f"获取融资融券标的失败: {e}")
             raise DataFlowException(f"获取融资融券标的失败: {e}")
     
+    # Tushare index_dailybasic 接口支持的指数代码（文档 doc_id=128，需 400+ 积分）
+    INDEX_DAILYBASIC_SUPPORTED_CODES = frozenset({
+        "000001.SH",  # 上证综指
+        "399001.SZ",  # 深证成指
+        "000016.SH",  # 上证50
+        "000905.SH",  # 中证500
+        "399005.SZ",  # 中小板指
+        "399006.SZ",  # 创业板指
+    })
+
     def fetch_index_dailybasic(
         self,
         ts_code: Optional[str] = None,
@@ -246,6 +256,7 @@ class MarketDataFetcher:
         
         目前只提供上证综指(000001.SH)、深证成指(399001.SZ)、上证50(000016.SH)、
         中证500(000905.SH)、中小板指(399005.SZ)、创业板指(399006.SZ)的每日指标数据。
+        沪深300(000300.SH)、中证1000(000852.SH) 等不在支持列表，调用会返回空。
         数据从2004年1月开始提供。
         
         Args:
