@@ -101,7 +101,7 @@ def main():
     # 3. 构建 invoke 输入（只传 trade_date，由 news_fetch 节点通过 fetcher 拉取新闻）
     trade_date = _resolve_trade_date(fetcher, target_date)
     invoke_input: Dict[str, Any] = {"trade_date": trade_date}
-    print(f"交易日 {trade_date}，由 news_fetch 节点获取新闻（本地优先，无则抓取）。")
+    print(f"交易日 {trade_date}，由 news_fetch 节点获取新闻。")
 
     print("开始运行新闻分析子图...")
     start_time = time.perf_counter()
@@ -109,7 +109,9 @@ def main():
     result = graph.invoke(invoke_input)
 
     elapsed = time.perf_counter() - start_time
-    print(f"新闻分析子图运行完成，耗时 {elapsed:.2f} 秒。")
+    news_source = result.get("news_source", "")
+    source_desc = "本地" if news_source == "local" else "远程抓取" if news_source == "fetch" else "未知"
+    print(f"新闻分析子图运行完成，耗时 {elapsed:.2f} 秒。（新闻来源: {source_desc}）")
 
     from pprint import pprint
 

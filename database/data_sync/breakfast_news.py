@@ -63,6 +63,9 @@ def sync_breakfast_news() -> int:
         df = df.copy()
         df[date_col] = pd.to_datetime(df[date_col], errors="coerce").dt.strftime("%Y%m%d")
 
+    # 按日期升序，保证 id 与日期正相关（旧日期 id 小）
+    df = df.sort_values(by=date_col, ascending=True).reset_index(drop=True)
+
     count = 0
     with get_db_session() as session:
         for _, row in df.iterrows():

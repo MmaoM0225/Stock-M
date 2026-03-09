@@ -94,18 +94,24 @@ class SectorImpacts(BaseModel):
 
 def _get_news_sections_by_date(
     date_str: str, fetcher: Any, news_dir: str = "data/news", _sync_attempted: bool = False
-) -> List[Dict]:
+) -> tuple:
     """
     按日期获取新闻 sections，优先从数据库 breakfast_news 表。
     1. 查 DB：若有 json_file_path 且文件存在，直接读取
     2. 若有 detail_url：抓取页面，保存到 JSON，更新 DB 的 json_file_path
     3. 若无 DB 记录且未 sync 过：先 sync_breakfast_news，再重试
+
+    Returns:
+        (sections, source): sections 列表，source 为 "local"（本地）或 "fetch"（远程抓取）
     """
     import os
+    from pathlib import Path
+
     from database import BreakfastNews
     from database.config import get_db_session
 
-    json_path = os.path.join(news_dir, f"news_{date_str}.json")
+    json_path = Path(news_dir) / f"news_{date_str}.json"
+    json_path_str = json_path.as_posix()  # 统一使用正斜杠，如 data/news/news_20260309.json
 
     with get_db_session() as session:
         row = session.query(BreakfastNews).filter(BreakfastNews.pub_date == date_str).first()
@@ -115,19 +121,19 @@ def _get_news_sections_by_date(
 
     if row:
         # 1. 优先从 json_file_path 读取，若无则尝试默认路径 data/news/news_{date}.json
-        for path in [row_json_path, json_path]:
+        for path in [row_json_path, json_path_str]:
             if path and os.path.exists(path):
                 try:
                     with open(path, "r", encoding="utf-8") as f:
                         data = json.load(f)
                     sections = data.get("sections", [])
                     if sections:
-                        if path == json_path and not row_json_path:
+                        if path == json_path_str and not row_json_path:
                             with get_db_session() as session:
-                                session.query(BreakfastNews).filter(BreakfastNews.pub_date == date_str).update(
-                                    {BreakfastNews.json_file_path: json_path}
-                                )
-                        return sections
+                                r = session.query(BreakfastNews).filter(BreakfastNews.pub_date == date_str).first()
+                                if r:
+                                    r.json_file_path = json_path_str
+                        return (sections, "local")
                 except Exception as e:
                     logger.warning(f"读取 JSON 失败 {path}: {e}")
 
@@ -137,17 +143,17 @@ def _get_news_sections_by_date(
                 use_old_format = int(date_str) <= 20250603
                 news_data = fetcher.fetch_eastmoney_news_page(row_detail_url, use_old_format)
                 if news_data and news_data.get("sections"):
-                    os.makedirs(news_dir, exist_ok=True)
+                    json_path.parent.mkdir(parents=True, exist_ok=True)
                     with open(json_path, "w", encoding="utf-8") as f:
                         json.dump(news_data, f, ensure_ascii=False, indent=2)
                     with get_db_session() as session:
-                        session.query(BreakfastNews).filter(BreakfastNews.pub_date == date_str).update(
-                            {BreakfastNews.json_file_path: json_path}
-                        )
-                    return news_data.get("sections", [])
+                        r = session.query(BreakfastNews).filter(BreakfastNews.pub_date == date_str).first()
+                        if r:
+                            r.json_file_path = json_path_str
+                    return (news_data.get("sections", []), "fetch")
             except Exception as e:
                 logger.warning(f"抓取新闻失败: {e}")
-        return []
+        return ([], "fetch")
 
     # 3. 无 DB 记录，先同步早餐列表再重试（仅尝试一次，避免死循环）
     if not _sync_attempted:
@@ -158,7 +164,7 @@ def _get_news_sections_by_date(
         except Exception as e:
             logger.warning(f"同步财经早餐失败: {e}")
 
-    return []
+    return ([], "fetch")
 
 
 def create_news_fetch_node(fetcher: Optional[Any] = None):
@@ -198,12 +204,12 @@ def create_news_fetch_node(fetcher: Optional[Any] = None):
 
         # 3. 从数据库获取新闻 sections（DB 优先，json_file_path -> detail_url 抓取）
         try:
-            sections = _get_news_sections_by_date(current_date, fetcher)
+            sections, news_source = _get_news_sections_by_date(current_date, fetcher)
             if sections:
-                logger.info(f"获取 {current_date} 新闻成功，共 {len(sections)} 条 section")
+                logger.info(f"获取 {current_date} 新闻成功，共 {len(sections)} 条 section（来源: {'本地' if news_source == 'local' else '远程抓取'}）")
         except Exception as e:
             logger.warning(f"获取新闻失败: {e}")
-            sections = []
+            sections, news_source = [], "fetch"
 
         if not sections:
             return {
@@ -228,6 +234,7 @@ def create_news_fetch_node(fetcher: Optional[Any] = None):
             "messages": [],
             "trade_date": current_date,
             "news_sections": sections,
+            "news_source": news_source,
             "all_industries": all_industries,
         }
 

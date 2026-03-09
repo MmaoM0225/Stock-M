@@ -27,6 +27,7 @@ class NewsState(TypedDict, total=False):
 
     trade_date: str
     news_sections: List[Dict[str, Any]]
+    news_source: str  # "local" 或 "fetch"
     all_industries: List[str]
     section: Dict[str, Any]
     # 使用 Annotated + operator.add 让 LangGraph 自动做 map-reduce 聚合
