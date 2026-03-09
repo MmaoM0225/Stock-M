@@ -92,18 +92,87 @@ class SectorImpacts(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
 
 
+def _get_news_sections_by_date(
+    date_str: str, fetcher: Any, news_dir: str = "data/news", _sync_attempted: bool = False
+) -> List[Dict]:
+    """
+    按日期获取新闻 sections，优先从数据库 breakfast_news 表。
+    1. 查 DB：若有 json_file_path 且文件存在，直接读取
+    2. 若有 detail_url：抓取页面，保存到 JSON，更新 DB 的 json_file_path
+    3. 若无 DB 记录且未 sync 过：先 sync_breakfast_news，再重试
+    """
+    import os
+    from database import BreakfastNews
+    from database.config import get_db_session
+
+    json_path = os.path.join(news_dir, f"news_{date_str}.json")
+
+    with get_db_session() as session:
+        row = session.query(BreakfastNews).filter(BreakfastNews.pub_date == date_str).first()
+        # 在 session 关闭前提取属性，避免 detached instance 错误
+        row_json_path = row.json_file_path if row else None
+        row_detail_url = row.detail_url if row else None
+
+    if row:
+        # 1. 优先从 json_file_path 读取，若无则尝试默认路径 data/news/news_{date}.json
+        for path in [row_json_path, json_path]:
+            if path and os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    sections = data.get("sections", [])
+                    if sections:
+                        if path == json_path and not row_json_path:
+                            with get_db_session() as session:
+                                session.query(BreakfastNews).filter(BreakfastNews.pub_date == date_str).update(
+                                    {BreakfastNews.json_file_path: json_path}
+                                )
+                        return sections
+                except Exception as e:
+                    logger.warning(f"读取 JSON 失败 {path}: {e}")
+
+        # 2. 有 detail_url 则抓取
+        if row_detail_url and fetcher:
+            try:
+                use_old_format = int(date_str) <= 20250603
+                news_data = fetcher.fetch_eastmoney_news_page(row_detail_url, use_old_format)
+                if news_data and news_data.get("sections"):
+                    os.makedirs(news_dir, exist_ok=True)
+                    with open(json_path, "w", encoding="utf-8") as f:
+                        json.dump(news_data, f, ensure_ascii=False, indent=2)
+                    with get_db_session() as session:
+                        session.query(BreakfastNews).filter(BreakfastNews.pub_date == date_str).update(
+                            {BreakfastNews.json_file_path: json_path}
+                        )
+                    return news_data.get("sections", [])
+            except Exception as e:
+                logger.warning(f"抓取新闻失败: {e}")
+        return []
+
+    # 3. 无 DB 记录，先同步早餐列表再重试（仅尝试一次，避免死循环）
+    if not _sync_attempted:
+        try:
+            from database.data_sync.breakfast_news import sync_breakfast_news
+            sync_breakfast_news()
+            return _get_news_sections_by_date(date_str, fetcher, news_dir, _sync_attempted=True)
+        except Exception as e:
+            logger.warning(f"同步财经早餐失败: {e}")
+
+    return []
+
+
 def create_news_fetch_node(fetcher: Optional[Any] = None):
     """
     构建新闻获取节点。
 
     流程：
     1. 判断 trade_date 是否为交易日，否则返回空 sections 结束图
-    2. 使用 fetcher：先尝试本地文件，无则 fetch
-    3. 使用 dataflow.industry_data 获取完整行业列表
-    4. 输出 sections、all_industries 供 extract 节点使用（fetch 只获取数据，不做判断）
+    2. 从数据库 breakfast_news 表获取新闻：优先 json_file_path，无则按 detail_url 抓取
+    3. 从数据库 industry 表获取完整行业列表
+    4. 输出 sections、all_industries 供 extract 节点使用
 
     Args:
-        fetcher: NewsSentimentFetcher，用于本地读取或远程抓取新闻（必须提供）
+        fetcher: NewsSentimentFetcher，用于远程抓取新闻详情（必须提供）
     """
 
     def news_fetch_node(state):
@@ -118,29 +187,23 @@ def create_news_fetch_node(fetcher: Optional[Any] = None):
                 "news_sections": [],
             }
 
-        # 2. 需要 fetcher 来获取新闻
+        # 2. 需要 fetcher 来抓取新闻（当 DB 无 json_file_path 时）
         if fetcher is None:
-            logger.warning("未提供 fetcher，无法获取新闻")
+            logger.warning("未提供 fetcher，无法抓取新闻")
             return {
                 "messages": [{"type": "skip", "reason": "未配置 fetcher", "trade_date": current_date}],
                 "trade_date": current_date,
                 "news_sections": [],
             }
 
-        # 3a. 先尝试本地文件
-        news_data = fetcher.get_news_by_date(current_date)
-        if news_data and news_data.get("sections"):
-            sections = news_data.get("sections", [])
-        else:
-            # 3b. 本地无则 fetch
+        # 3. 从数据库获取新闻 sections（DB 优先，json_file_path -> detail_url 抓取）
+        try:
+            sections = _get_news_sections_by_date(current_date, fetcher)
+            if sections:
+                logger.info(f"获取 {current_date} 新闻成功，共 {len(sections)} 条 section")
+        except Exception as e:
+            logger.warning(f"获取新闻失败: {e}")
             sections = []
-            try:
-                news_data = fetcher.fetch_eastmoney_news_by_date(current_date)
-                if news_data and news_data.get("sections"):
-                    logger.info(f"抓取 {current_date} 新闻成功，共 {len(news_data['sections'])} 条")
-                    sections = news_data.get("sections", [])
-            except Exception as e:
-                logger.warning(f"抓取 {current_date} 新闻失败: {e}")
 
         if not sections:
             return {
@@ -149,10 +212,15 @@ def create_news_fetch_node(fetcher: Optional[Any] = None):
                 "news_sections": [],
             }
 
-        # 4. 获取完整行业列表，供 extract 节点（LLM 从中选择）
+        # 4. 从数据库获取完整行业列表，供 extract 节点（LLM 从中选择）
         try:
-            from dataflow.industry_data import get_all_industry_names
-            all_industries = get_all_industry_names()
+            from database import Industry
+            from database.config import get_db_session
+            with get_db_session() as session:
+                rows = session.query(Industry.industry_name).filter(
+                    Industry.industry_name.isnot(None)
+                ).distinct().all()
+                all_industries = sorted({r[0] for r in rows if r[0]})
         except Exception as e:
             logger.warning(f"获取行业列表失败: {e}")
             all_industries = []
