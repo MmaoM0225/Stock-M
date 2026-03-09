@@ -133,9 +133,12 @@ MACRO_DAILY_LOOKBACK = 60   # 日线回溯天数
 MACRO_MONTH_LOOKBACK = 12   # 月度回溯月数（LPR/CPI/社融）
 # Markdown 报告生成：由单独节点执行，configurable.macro_config 可覆盖
 MACRO_GENERATE_MARKDOWN = True  # 是否生成 macro Markdown 报告
-MACRO_USE_LLM_FOR_MARKDOWN = True  # 是否用 LLM 润色 MD（多一次调用、耗时增加）
+MACRO_USE_LLM_FOR_MARKDOWN = False  # 是否用 LLM 润色 MD（多一次调用、耗时增加）
 NEWS_GENERATE_MARKDOWN = False  # 是否生成 news Markdown 报告
 NEWS_USE_LLM_FOR_MARKDOWN = False  # 是否用 LLM 润色 news MD
+# 策略经理配置
+STRATEGY_GENERATE_MARKDOWN = True  # 是否生成 strategy Markdown 报告
+STRATEGY_USE_LLM_FOR_MARKDOWN = False  # 是否用 LLM 润色 strategy MD
 # 宏观经济分析师配置
 MACRO_USE_US_STOCK_TREND = False  # 是否纳入美股趋势分析
 # 国内市场分析默认指数：指数名称、指数代码、指数描述
