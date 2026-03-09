@@ -56,6 +56,14 @@ def get_news_config(config: Optional[Dict] = None) -> Dict[str, Any]:
     return conf.get("news_config") or {}
 
 
+def get_strategy_config(config: Optional[Dict] = None) -> Dict[str, Any]:
+    """从 RunnableConfig 中提取 strategy_config。"""
+    if not config:
+        return {}
+    conf = config.get("configurable") or {}
+    return conf.get("strategy_config") or {}
+
+
 def date_offset(date_str: str, days: int = 0, months: int = 0) -> str:
     """从 date_str (YYYYMMDD) 往前偏移 days 天或 months 月。"""
     try:

@@ -161,7 +161,17 @@ def create_macro_fetch_node(
         if market:
             try:
                 dfs_basic = []
-                for code, _, _ in index_items:
+                supported = getattr(
+                    market, "INDEX_DAILYBASIC_SUPPORTED_CODES", None
+                )
+                for code, name, _ in index_items:
+                    if supported and code not in supported:
+                        logger.info(
+                            "fetch_index_dailybasic 跳过 %s (%s)：不在 Tushare 支持列表",
+                            code,
+                            name,
+                        )
+                        continue
                     try:
                         df = market.fetch_index_dailybasic(
                             ts_code=code,

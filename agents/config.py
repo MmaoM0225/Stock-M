@@ -133,12 +133,18 @@ MACRO_DAILY_LOOKBACK = 60   # 日线回溯天数
 MACRO_MONTH_LOOKBACK = 12   # 月度回溯月数（LPR/CPI/社融）
 # Markdown 报告生成：由单独节点执行，configurable.macro_config 可覆盖
 MACRO_GENERATE_MARKDOWN = True  # 是否生成 macro Markdown 报告
-MACRO_USE_LLM_FOR_MARKDOWN = True  # 是否用 LLM 润色 MD（多一次调用、耗时增加）
+MACRO_USE_LLM_FOR_MARKDOWN = False  # 是否用 LLM 润色 MD（多一次调用、耗时增加）
 NEWS_GENERATE_MARKDOWN = False  # 是否生成 news Markdown 报告
 NEWS_USE_LLM_FOR_MARKDOWN = False  # 是否用 LLM 润色 news MD
+# 策略经理配置
+STRATEGY_GENERATE_MARKDOWN = True  # 是否生成 strategy Markdown 报告
+STRATEGY_USE_LLM_FOR_MARKDOWN = False  # 是否用 LLM 润色 strategy MD
 # 宏观经济分析师配置
 MACRO_USE_US_STOCK_TREND = False  # 是否纳入美股趋势分析
 # 国内市场分析默认指数：指数名称、指数代码、指数描述
+# 注意：index_dailybasic（每日指标：换手率、PE/PB 等）仅支持以下 6 个指数：
+# 000001.SH, 399001.SZ, 000016.SH, 000905.SH, 399005.SZ, 399006.SZ
+# 沪深300(000300.SH)、中证1000(000852.SH) 不在支持列表，会导致每日指标获取为空
 MACRO_DEFAULT_INDEX_CODES = [
     {
         "name": "上证综指",
@@ -146,9 +152,9 @@ MACRO_DEFAULT_INDEX_CODES = [
         "description": "上海证券交易所综合股价指数，反映沪市整体表现",
     },
     {
-        "name": "沪深300",
-        "code": "000300.SH",
-        "description": "由沪深两市最具代表性的300只股票组成，反映A股市场整体走势",
+        "name": "上证50",
+        "code": "000016.SH",
+        "description": "沪市最具代表性的50只大盘蓝筹股，反映核心资产走势",
     },
     {
         "name": "中证500",
@@ -156,9 +162,9 @@ MACRO_DEFAULT_INDEX_CODES = [
         "description": "剔除沪深300后、总市值排名靠前的500只股票，代表中盘股表现",
     },
     {
-        "name": "中证1000",
-        "code": "000852.SH",
-        "description": "剔除沪深300和中证500后、总市值排名靠前的1000只股票，代表小盘股表现",
+        "name": "中小板指",
+        "code": "399005.SZ",
+        "description": "深交所中小板最具代表性的100只股票，反映中小盘股表现",
     },
     {
         "name": "创业板指",
