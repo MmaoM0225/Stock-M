@@ -34,6 +34,7 @@ def create_macro_economist_fetch_node(market_fetcher=None):
         start_date = date_offset(end_date, days=MACRO_DAILY_LOOKBACK)
         start_m = date_offset(end_date, months=MACRO_MONTH_LOOKBACK)[:6]
         end_m = end_date[:6]
+        lpr_start_date = f"{start_m}01"  # LPR 为月度报价，按一年回溯
 
         lpr_data = cpi_data = sf_data = pmi_data = m2_data = gdp_data = None
 
@@ -55,7 +56,7 @@ def create_macro_economist_fetch_node(market_fetcher=None):
 
         if market:
             try:
-                lpr_data = market.fetch_shibor_lpr(start_date, end_date)
+                lpr_data = market.fetch_shibor_lpr(lpr_start_date, end_date)
             except Exception as e:
                 logger.warning("fetch_shibor_lpr 失败: %s", e)
             try:

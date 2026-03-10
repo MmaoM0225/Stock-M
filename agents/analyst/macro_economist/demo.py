@@ -5,6 +5,7 @@ Macro Economist（宏观经济分析师）Demo。
     python -m agents.analyst.macro_economist.demo 20260305
 """
 
+import logging
 import re
 import time
 from datetime import datetime, timedelta
@@ -37,6 +38,11 @@ def _resolve_trade_date(target_date: Optional[datetime]) -> str:
 def main():
     import argparse
     from pprint import pprint
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
 
     parser = argparse.ArgumentParser(description="Macro Economist Demo")
     parser.add_argument("date", nargs="?", help="交易日期 YYYYMMDD")
