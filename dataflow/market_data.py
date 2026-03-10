@@ -107,6 +107,56 @@ class MarketDataFetcher:
             logger.error(f"获取股票基础信息失败: {e}")
             raise DataFlowException(f"获取股票基础信息失败: {e}")
     
+    def fetch_stock_individual_info_em(
+        self,
+        symbol: str,
+        timeout: Optional[float] = None
+    ) -> pd.DataFrame:
+        """
+        东方财富-个股-股票信息
+        
+        用于补充 stock_list 表，主要包含流通股本、总市值、流通市值等，便于筛选。
+        数据来源: http://quote.eastmoney.com/concept/sh603777.html
+        
+        Args:
+            symbol: 股票代码，6位数字，如 "000001"、"603777"
+                   若传入 ts_code 格式(如 000001.SZ)，会自动提取 6 位代码
+            timeout: 请求超时秒数，默认不设置
+        
+        Returns:
+            pd.DataFrame: 列 item, value，包含最新价、股票代码、股票简称、
+                总股本、流通股、总市值、流通市值、行业、上市时间等
+        """
+        if not self.akshare_enabled:
+            raise DataFlowException("AkShare 未配置或未启用")
+        
+        # 兼容 ts_code 格式，提取 6 位代码
+        code = str(symbol).strip()
+        if "." in code:
+            code = code.split(".")[0]
+        if len(code) != 6 or not code.isdigit():
+            raise DataFlowException(f"股票代码格式错误，需 6 位数字: {symbol}")
+        
+        try:
+            logger.debug(f"获取东财个股信息: {code}")
+            kwargs = {"symbol": code}
+            if timeout is not None:
+                kwargs["timeout"] = timeout
+            
+            df = ak.stock_individual_info_em(**kwargs)
+            
+            if df is None or df.empty:
+                logger.warning(f"未获取到个股信息: {code}")
+                return pd.DataFrame()
+            
+            df = clean_dataframe(df)
+            logger.debug(f"成功获取个股信息: {code}")
+            return df
+            
+        except Exception as e:
+            logger.error(f"获取东财个股信息失败: {e}")
+            raise DataFlowException(f"获取东财个股信息失败: {e}")
+    
     def fetch_money_flow(
         self,
         ts_code: str,
