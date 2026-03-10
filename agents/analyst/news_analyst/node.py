@@ -326,6 +326,7 @@ def _build_news_analysis_md_with_llm(analysis_result: Dict, llm, trade_date: str
             ("system", system_msg),
             ("human", "当日新闻分析数据（JSON）：\n{data}\n\n请据此撰写一份分析式 Markdown 报告。"),
         ])
+        logger.info("news_markdown: LLM 生成新闻报告")
         chain = prompt | llm
         raw = chain.invoke({"data": json.dumps(analysis_result, ensure_ascii=False, indent=2, default=str)})
         text = raw.content if hasattr(raw, "content") else str(raw)
@@ -447,6 +448,7 @@ def create_news_extract_node(llm):
         )
         
         try:
+            logger.info("news_extract: 抽取单条新闻事件")
             chain = prompt | llm
             raw = chain.invoke(
                 {
@@ -560,6 +562,7 @@ def create_news_reduce_node(llm):
                 }
             )
 
+            logger.info("news_reduce: 事件列表 → 板块影响与宏观环境")
             chain = prompt | llm
             raw = chain.invoke({"events": events_text, "industries": ", ".join(industries)})
 

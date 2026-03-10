@@ -1,8 +1,8 @@
 """
-策略经理 - 节点函数
+Macro Manager - 节点函数
 
-包含：strategy_synthesize, strategy_markdown_write
-配置通过 RunnableConfig 传入，不纳入 State。
+包含：macro_synthesize, macro_markdown_write
+综合 macro_analysis（来自 4 分析师）与 news_analysis，生成 strategy_analysis。
 """
 import json
 import logging
@@ -94,23 +94,35 @@ class StrategyAnalysis(BaseModel):
         default_factory=list,
         description="主要机会点"
     )
+    sector_preference: List[str] = Field(
+        default_factory=list,
+        description="建议超配/关注的板块或行业列表"
+    )
+    sector_avoid: List[str] = Field(
+        default_factory=list,
+        description="建议规避/低配的板块或行业列表"
+    )
+    positioning_advice: str = Field(
+        default="",
+        description="仓位与配置建议的总体说明"
+    )
     summary: str = Field(
         description="策略日报一句话摘要"
     )
 
 
 # ---------------------------------------------------------------------------
-# strategy_synthesize
+# macro_synthesize
 # ---------------------------------------------------------------------------
 
 
-def create_strategy_synthesize_node(llm=None):
+def create_macro_synthesize_node(llm=None):
     """
-    构建策略综合节点。
-    综合 macro_analysis 与 news_analysis，生成 strategy_analysis。
+    构建宏观综合节点。
+    综合 macro_analysis（macro_economist、commodity、market_sentiment、liquidity）与 news_analysis，生成 strategy_analysis。
     """
 
-    def strategy_synthesize_node(
+    def macro_synthesize_node(
         state: Dict, config: Optional[RunnableConfig] = None
     ) -> Dict:
         trade_date = (
@@ -128,7 +140,6 @@ def create_strategy_synthesize_node(llm=None):
             "reason": "数据不足，建议维持中性仓位。",
         }
 
-        # 降级：两者都缺失时返回占位结果
         if not macro and not news:
             return {
                 "strategy_analysis": {
@@ -140,6 +151,9 @@ def create_strategy_synthesize_node(llm=None):
                     "sector_allocation": {},
                     "key_risks": ["数据不足"],
                     "key_opportunities": [],
+                    "sector_preference": [],
+                    "sector_avoid": [],
+                    "positioning_advice": "",
                     "summary": "数据不足，请先运行宏观与新闻分析师。",
                 }
             }
@@ -155,6 +169,9 @@ def create_strategy_synthesize_node(llm=None):
                     "sector_allocation": {},
                     "key_risks": [],
                     "key_opportunities": [],
+                    "sector_preference": [],
+                    "sector_avoid": [],
+                    "positioning_advice": "",
                     "summary": "请配置 LLM 以生成策略分析。",
                 }
             }
@@ -162,7 +179,7 @@ def create_strategy_synthesize_node(llm=None):
         system_msg = (
             "你是一位资深策略经理，负责综合宏观经济分析与新闻分析，输出可执行的交易策略建议。\n\n"
             "【输入说明】\n"
-            "- macro_analysis: 含 date, monetary(货币环境), global(全球环境), market(A股技术面), summary\n"
+            "- macro_analysis: 含 macro_economist(宏观经济)、commodity(大宗商品)、market_sentiment(市场情绪)、liquidity(流动性)、summary\n"
             "- news_analysis: 含 date, events(事件列表), sector_impacts(板块影响), macro_environment(流动性/政策/风险/市场情绪)\n\n"
             "【输出要求】\n"
             "必须返回严格符合以下结构的 JSON，只输出 JSON，不要任何解释：\n"
@@ -170,16 +187,21 @@ def create_strategy_synthesize_node(llm=None):
             "- market_direction: bullish/bearish/neutral\n"
             "- direction_confidence: 0-1 的浮点数\n"
             "- direction_reason: 1-3 句话说明方向判断理由\n"
-            "- position_control: 仓位控制对象，含 position_level(建议仓位百分数0-100)、position_action(add/reduce/hold)、max_position(最大仓位百分数0-100)、min_position(最小仓位百分数0-100)、reason(仓位控制理由)\n"
-            "- sector_allocation: 字典，key 为板块/行业名，value 为对象，含 allocation(overweight/neutral/underweight)、sentiment(bullish/bearish/neutral)、confidence(0-1)、reason(字符串数组)\n"
+            "- position_control: 仓位控制对象，含 position_level(建议仓位百分数0-100)、position_action(add/reduce/hold)、max_position、min_position、reason\n"
+            "- sector_allocation: 字典，key 为板块/行业名，value 含 allocation(overweight/neutral/underweight)、sentiment(bullish/bearish/neutral)、confidence(0-1)、reason(字符串数组)\n"
             "- key_risks: 主要风险列表（字符串数组）\n"
             "- key_opportunities: 主要机会列表（字符串数组）\n"
+            "- sector_preference: 建议超配/关注的板块或行业列表（字符串数组）\n"
+            "- sector_avoid: 建议规避/低配的板块或行业列表（字符串数组）\n"
+            "- positioning_advice: 仓位与配置建议的总体说明（字符串）\n"
             "- summary: 策略日报一句话摘要\n\n"
             "【重要】\n"
-            "- position_control 必须根据市场方向与风险给出：看多时 position_level 可偏高、position_action 可为 add；看空时偏低、可为 reduce；震荡时 hold\n"
-            "- sector_allocation 至少 3 个、最多 10 个板块；板块名从 news 的 sector_impacts 或宏观/新闻内容中选取\n"
+            "- position_control 必须根据市场方向与风险给出合理建议\n"
+            "- sector_allocation 至少 3 个、最多 10 个板块\n"
+            "- sector_preference 从 overweight 板块中提炼，sector_avoid 从 underweight 板块中提炼，便于快速查阅\n"
+            "- positioning_advice 给出仓位与配置的总体操作建议（1-3 句话）\n"
             "- 当宏观与新闻结论冲突时，说明权衡逻辑并给出综合判断\n"
-            "- 置信度需反映不确定性，不要盲目给高置信度"
+            "- 置信度需反映不确定性"
         )
 
         prompt = ChatPromptTemplate.from_messages(
@@ -196,6 +218,7 @@ def create_strategy_synthesize_node(llm=None):
         )
 
         try:
+            logger.info("macro_synthesize: 综合宏观与新闻 → 策略分析 JSON")
             chain = prompt | llm
             raw = chain.invoke(
                 {
@@ -211,22 +234,34 @@ def create_strategy_synthesize_node(llm=None):
             data = extract_json_text(raw)
             data["date"] = trade_date
 
-            # 将 sector_allocation 中的 dict 转为 SectorAllocation 兼容格式
             sa_raw = data.get("sector_allocation") or {}
             sector_allocation = {}
             for k, v in sa_raw.items():
                 if isinstance(v, dict):
+                    r = v.get("reason") or []
+                    if isinstance(r, str):
+                        r = [r] if r else []
                     sector_allocation[k] = {
                         "allocation": v.get("allocation", "neutral"),
                         "sentiment": v.get("sentiment", "neutral"),
                         "confidence": float(v.get("confidence", 0.5)),
-                        "reason": v.get("reason") or [],
+                        "reason": r,
                     }
                 else:
                     sector_allocation[k] = v
             data["sector_allocation"] = sector_allocation
 
-            # 解析 position_control（支持 0-1 小数或 0-100 百分数，统一为百分数）
+            # 确保 sector_preference、sector_avoid 为列表
+            for key in ("sector_preference", "sector_avoid"):
+                val = data.get(key)
+                if val is None:
+                    data[key] = []
+                elif isinstance(val, str):
+                    data[key] = [val] if val.strip() else []
+                elif not isinstance(val, list):
+                    data[key] = list(val) if val else []
+            data.setdefault("positioning_advice", data.get("positioning_advice", "") or "")
+
             def _to_pct(v, default=50):
                 x = float(v) if v is not None else default
                 return x * 100 if 0 < x <= 1 else x
@@ -252,7 +287,7 @@ def create_strategy_synthesize_node(llm=None):
             result = StrategyAnalysis.model_validate(data)
             return {"strategy_analysis": result.model_dump()}
         except Exception as e:
-            logger.warning("strategy_synthesize LLM 失败: %s", e)
+            logger.warning("macro_synthesize LLM 失败: %s", e)
             return {
                 "strategy_analysis": {
                     "date": trade_date,
@@ -269,15 +304,18 @@ def create_strategy_synthesize_node(llm=None):
                     "sector_allocation": {},
                     "key_risks": [],
                     "key_opportunities": [],
+                    "sector_preference": [],
+                    "sector_avoid": [],
+                    "positioning_advice": "",
                     "summary": f"策略生成失败: {e}",
                 }
             }
 
-    return strategy_synthesize_node
+    return macro_synthesize_node
 
 
 # ---------------------------------------------------------------------------
-# strategy_markdown_write
+# macro_markdown_write
 # ---------------------------------------------------------------------------
 
 
@@ -320,6 +358,29 @@ def _build_strategy_analysis_md_programmatic(
         lines.append(f"- **理由**: {pc.get('reason', '')}")
     else:
         lines.append("（无仓位控制建议）")
+    lines.append("")
+
+    # 配置建议说明
+    positioning_advice = analysis_result.get("positioning_advice", "").strip()
+    if positioning_advice:
+        lines.extend(["---", "", "## 配置建议", "", positioning_advice, ""])
+
+    lines.extend(
+        [
+            "---",
+            "",
+            "## 板块偏好与规避",
+            "",
+        ]
+    )
+    pref = analysis_result.get("sector_preference") or []
+    avoid = analysis_result.get("sector_avoid") or []
+    if pref:
+        lines.append("- **建议关注**: " + "、".join(pref))
+    if avoid:
+        lines.append("- **建议规避**: " + "、".join(avoid))
+    if not pref and not avoid:
+        lines.append("（无）")
     lines.append("")
     lines.extend(
         [
@@ -403,6 +464,7 @@ def _build_strategy_analysis_md_with_llm(
                 ),
             ]
         )
+        logger.info("macro_markdown: LLM 润色策略报告")
         chain = prompt | llm
         raw = chain.invoke(
             {
@@ -456,10 +518,10 @@ def _write_strategy_analysis_md(
         return None
 
 
-def create_strategy_markdown_write_node(llm=None):
+def create_macro_markdown_write_node(llm=None):
     """构建策略 Markdown 写入节点。由 configurable.strategy_config.generate_markdown 控制是否执行。"""
 
-    def strategy_markdown_write_node(
+    def macro_markdown_write_node(
         state: Dict, config: Optional[RunnableConfig] = None
     ) -> Dict:
         analysis_result = state.get("strategy_analysis") or {}
@@ -478,6 +540,6 @@ def create_strategy_markdown_write_node(llm=None):
             llm=llm,
             use_llm_for_md=use_llm,
         )
-        return {}  # 不修改 state，仅写文件
+        return {}
 
-    return strategy_markdown_write_node
+    return macro_markdown_write_node

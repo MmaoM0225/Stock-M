@@ -64,6 +64,33 @@ def get_strategy_config(config: Optional[Dict] = None) -> Dict[str, Any]:
     return conf.get("strategy_config") or {}
 
 
+def get_commodity_config(config: Optional[Dict] = None) -> Dict[str, Any]:
+    """从 RunnableConfig 中提取 commodity_config。兼容 macro_config.commodity_codes。"""
+    if not config:
+        return {}
+    conf = config.get("configurable") or {}
+    cfg = conf.get("commodity_config") or conf.get("macro_config") or {}
+    return cfg
+
+
+def get_market_sentiment_config(config: Optional[Dict] = None) -> Dict[str, Any]:
+    """从 RunnableConfig 中提取 market_sentiment_config。兼容 macro_config.index_codes。"""
+    if not config:
+        return {}
+    conf = config.get("configurable") or {}
+    cfg = conf.get("market_sentiment_config") or conf.get("macro_config") or {}
+    return cfg
+
+
+def get_liquidity_config(config: Optional[Dict] = None) -> Dict[str, Any]:
+    """从 RunnableConfig 中提取 liquidity_config。"""
+    if not config:
+        return {}
+    conf = config.get("configurable") or {}
+    cfg = conf.get("liquidity_config") or conf.get("macro_config") or {}
+    return cfg
+
+
 def date_offset(date_str: str, days: int = 0, months: int = 0) -> str:
     """从 date_str (YYYYMMDD) 往前偏移 days 天或 months 月。"""
     try:
