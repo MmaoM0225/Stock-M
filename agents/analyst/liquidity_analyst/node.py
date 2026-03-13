@@ -147,13 +147,12 @@ M2（月度）:
             [("system", system_msg), ("human", human_msg)]
         )
 
-        logger.info("liquidity_analysis: 流动性数据 → 分析 JSON")
+        logger.info("正在处理 流动性分析：流动性数据 → 分析 JSON")
         chain = prompt | llm
-        raw = chain.invoke({
-            "lpr": _format_data_tail(lpr),
-            "m2": _format_data_tail(m2),
-            "sf": _format_data_tail(sf),
-        })
+        raw = chain.invoke(
+            {"lpr": _format_data_tail(lpr), "m2": _format_data_tail(m2), "sf": _format_data_tail(sf)},
+            config={**(config or {}), "run_name": "流动性分析"},
+        )
         data = extract_json_text(raw)
         for k, v in _LIQUIDITY_ANALYST_DEFAULT.items():
             data.setdefault(k, v)

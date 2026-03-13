@@ -248,16 +248,19 @@ M2（月度）:
         )
 
         try:
-            logger.info("macro_economist: 宏观数据 → 分析 JSON")
+            logger.info("正在处理 宏观经济分析：宏观数据 → 分析 JSON")
             chain = prompt | llm
-            raw = chain.invoke({
-                "gdp": _format_data_tail(gdp),
-                "lpr": _format_data_tail(lpr),
-                "cpi": _format_data_tail(cpi),
-                "sf": _format_data_tail(sf),
-                "pmi": _format_data_tail(pmi),
-                "m2": _format_data_tail(m2),
-            })
+            raw = chain.invoke(
+                {
+                    "gdp": _format_data_tail(gdp),
+                    "lpr": _format_data_tail(lpr),
+                    "cpi": _format_data_tail(cpi),
+                    "sf": _format_data_tail(sf),
+                    "pmi": _format_data_tail(pmi),
+                    "m2": _format_data_tail(m2),
+                },
+                config={**(config or {}), "run_name": "宏观经济分析"},
+            )
             data = extract_json_text(raw)
             # 补全可能缺失的字段
             for k, v in _MACRO_ECONOMIST_DEFAULT.items():

@@ -1,12 +1,17 @@
 """
 使用 dotenv 加载环境变量配置 API Token，其他参数可动态配置
 """
+import logging
 import os
 from re import T
 from dotenv import load_dotenv
 
 # 加载环境变量
 load_dotenv()
+
+# 抑制 httpx/httpcore 的 HTTP Request INFO 日志，改为在 LLM 回调中打「LLM调用成功，正在处理 XXX」
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 # LLM 模型配置
 class LLMConfig:
@@ -132,13 +137,13 @@ class LoggingConfig:
 MACRO_DAILY_LOOKBACK = 60   # 日线回溯天数
 MACRO_MONTH_LOOKBACK = 12   # 月度回溯月数（LPR/CPI/社融）
 # Markdown 报告生成：由单独节点执行，configurable.macro_config 可覆盖
-MACRO_GENERATE_MARKDOWN = True  # 是否生成 macro Markdown 报告
-MACRO_USE_LLM_FOR_MARKDOWN = False  # 是否用 LLM 润色 MD（多一次调用、耗时增加）
+# 宏观管理器（macro_manager）：是否生成 data/analysis 下的汇总报告、报告正文是否由 LLM 生成
+MACRO_GENERATE_MARKDOWN = True   # 是否生成宏观汇总 Markdown 报告（False 则 macro_summary 后不写文件）
+MACRO_USE_LLM_FOR_MARKDOWN = False  # True=最终报告由 LLM 写（full_report_markdown）；False=仅程序化拼接各分析师结果
 NEWS_GENERATE_MARKDOWN = False  # 是否生成 news Markdown 报告
 NEWS_USE_LLM_FOR_MARKDOWN = False  # 是否用 LLM 润色 news MD
-# 策略经理配置
-STRATEGY_GENERATE_MARKDOWN = True  # 是否生成 strategy Markdown 报告
-STRATEGY_USE_LLM_FOR_MARKDOWN = False  # 是否用 LLM 润色 strategy MD
+# 宏观管理器配置：同时运行的分析师子图数量上限（避免 API 限流与资源打满）
+MACRO_MANAGER_MAX_CONCURRENT_SUBGRAPHS = 3
 # 宏观经济分析师配置
 MACRO_USE_US_STOCK_TREND = False  # 是否纳入美股趋势分析
 # 国内市场分析默认指数：指数名称、指数代码、指数描述

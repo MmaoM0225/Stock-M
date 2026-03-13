@@ -18,6 +18,7 @@ from langchain_openai import ChatOpenAI
 
 from .graph import create_news_graph
 from ...config import get_llm_config, validate_config
+from ...callbacks import get_llm_callbacks
 from dataflow.news_sentiment import NewsSentimentFetcher
 
 
@@ -92,6 +93,7 @@ def main():
         temperature=llm_config.temperature,
         max_retries=llm_config.max_retries,
         timeout=llm_config.timeout,
+        callbacks=get_llm_callbacks(),
     )
 
     # 2. 构建 fetcher，fetch 节点负责获取新闻和完整行业列表（dataflow.industry_data）

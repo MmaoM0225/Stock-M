@@ -379,7 +379,7 @@ def create_news_markdown_write_node(llm=None):
 
 def create_news_extract_node(llm):
     """构建新闻抽取节点。all_industries 由 fetch 节点预先写入，LLM 从中选择相关行业。"""
-    def news_extract_node(state):
+    def news_extract_node(state, config: Optional[RunnableConfig] = None):
         section = state.get("section", {})
         
         title = section.get("title", "")
@@ -448,13 +448,11 @@ def create_news_extract_node(llm):
         )
         
         try:
-            logger.info("news_extract: 抽取单条新闻事件")
+            logger.info("正在处理 新闻事件抽取：抽取单条新闻事件")
             chain = prompt | llm
             raw = chain.invoke(
-                {
-                    "title": title,
-                    "content": content,
-                }
+                {"title": title, "content": content},
+                config={**(config or {}), "run_name": "新闻事件抽取"},
             )
 
             data = extract_json_text(raw)
@@ -482,7 +480,7 @@ def create_news_extract_node(llm):
 
 
 def create_news_reduce_node(llm):
-    def news_reduce_node(state):
+    def news_reduce_node(state, config: Optional[RunnableConfig] = None):
         current_date = state.get("trade_date", datetime.now().strftime("%Y%m%d"))
         events = state.get("events", [])
         
@@ -562,9 +560,12 @@ def create_news_reduce_node(llm):
                 }
             )
 
-            logger.info("news_reduce: 事件列表 → 板块影响与宏观环境")
+            logger.info("正在处理 新闻汇总：事件列表 → 板块影响与宏观环境")
             chain = prompt | llm
-            raw = chain.invoke({"events": events_text, "industries": ", ".join(industries)})
+            raw = chain.invoke(
+                {"events": events_text, "industries": ", ".join(industries)},
+                config={**(config or {}), "run_name": "新闻汇总"},
+            )
 
             data = extract_json_text(raw)
             result = SectorImpacts.model_validate(data)
@@ -581,7 +582,7 @@ def create_news_reduce_node(llm):
             macro_environment = result.macro_environment.model_dump()
 
         except Exception as e:
-            print(f"汇总分析时出错: {str(e)}")
+            logger.warning("新闻汇总(reduce)时出错: %s", e)
 
         analysis_result = {
             "date": current_date,

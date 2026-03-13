@@ -14,6 +14,7 @@ from langchain_openai import ChatOpenAI
 
 from .graph import create_liquidity_analyst_graph
 from ...config import get_llm_config, validate_config
+from ...callbacks import get_llm_callbacks
 
 
 def _parse_trade_date(s: str) -> datetime:
@@ -56,6 +57,7 @@ def main():
         temperature=llm_config.temperature,
         max_retries=llm_config.max_retries,
         timeout=llm_config.timeout,
+        callbacks=get_llm_callbacks(),
     )
 
     graph = create_liquidity_analyst_graph(llm=llm)

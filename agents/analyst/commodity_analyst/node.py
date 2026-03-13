@@ -122,9 +122,12 @@ def create_commodity_analysis_node(llm=None):
         )
 
         try:
-            logger.info("commodity_analysis: 品种 %s 行情分析", name)
+            logger.info("正在处理 大宗商品分析：品种 %s 行情分析", name)
             chain = prompt | llm
-            raw = chain.invoke({"name": name, "description": description or "", "data": data_str})
+            raw = chain.invoke(
+                {"name": name, "description": description or "", "data": data_str},
+                config={**(config or {}), "run_name": "大宗商品分析"},
+            )
             result = extract_json_text(raw)
             return {"commodity_chunk": [{"key": current_key, "name": name, "result": result}]}
         except Exception as e:
@@ -245,9 +248,12 @@ def create_commodity_reduce_node(llm=None):
             [("system", system_msg), ("human", human_msg)]
         )
 
-        logger.info("commodity_reduce: 汇总各品种 → 宏观信号 JSON")
+        logger.info("正在处理 大宗商品汇总：汇总各品种 → 宏观信号 JSON")
         chain = prompt | llm
-        raw = chain.invoke({"chunks": chunks_text})
+        raw = chain.invoke(
+            {"chunks": chunks_text},
+            config={**(config or {}), "run_name": "大宗商品汇总"},
+        )
         data = extract_json_text(raw)
         for k, v in _COMMODITY_REDUCE_DEFAULT.items():
             data.setdefault(k, v)

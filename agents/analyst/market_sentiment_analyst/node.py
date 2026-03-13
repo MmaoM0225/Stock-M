@@ -128,13 +128,11 @@ def create_market_sentiment_analysis_node(llm=None):
             ]
         )
 
-        logger.info("market_sentiment_analysis: 指数 %s 技术分析", name)
+        logger.info("正在处理 市场情绪分析：指数 %s 技术分析", name)
         chain = prompt | llm
         raw = chain.invoke(
-            {
-                "indicators": indicators_str,
-                "index_data": index_data_str,
-            }
+            {"indicators": indicators_str, "index_data": index_data_str},
+            config={**(config or {}), "run_name": "市场情绪分析"},
         )
         data = extract_json_text(raw)
         return {"market_index_chunk": [{"code": code, "name": name, "result": data}]}
@@ -228,9 +226,12 @@ def create_market_sentiment_reduce_node(llm=None):
             [("system", system_msg), ("human", human_msg)]
         )
 
-        logger.info("market_sentiment_reduce: 汇总各指数 → 情绪 JSON")
+        logger.info("正在处理 市场情绪汇总：汇总各指数 → 情绪 JSON")
         chain = prompt | llm
-        raw = chain.invoke({"chunks": chunks_text})
+        raw = chain.invoke(
+            {"chunks": chunks_text},
+            config={**(config or {}), "run_name": "市场情绪汇总"},
+        )
         data = extract_json_text(raw)
         for k, v in _MARKET_SENTIMENT_REDUCE_DEFAULT.items():
             data.setdefault(k, v)
