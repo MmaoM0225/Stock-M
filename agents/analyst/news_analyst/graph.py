@@ -27,7 +27,9 @@ class NewsState(TypedDict, total=False):
 
     trade_date: str
     news_sections: List[Dict[str, Any]]
+    news_source: str  # "local" 或 "fetch"
     all_industries: List[str]
+    ths_concept_list: List[str]  # 同花顺概念列表，与 all_industries 一并供 LLM 选用
     section: Dict[str, Any]
     # 使用 Annotated + operator.add 让 LangGraph 自动做 map-reduce 聚合
     events: Annotated[List[Dict[str, Any]], operator.add]

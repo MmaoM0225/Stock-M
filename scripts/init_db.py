@@ -23,7 +23,7 @@ def main():
     engine = get_engine()
     logger.info(f"数据库连接: {engine.url}")
     init_db(engine)
-    logger.info("数据库初始化完成，表已创建: stock_list, industry, breakfast_news")
+    logger.info("数据库初始化完成")
 
 
 if __name__ == "__main__":

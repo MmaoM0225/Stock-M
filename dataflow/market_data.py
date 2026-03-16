@@ -107,6 +107,56 @@ class MarketDataFetcher:
             logger.error(f"获取股票基础信息失败: {e}")
             raise DataFlowException(f"获取股票基础信息失败: {e}")
     
+    def fetch_stock_individual_info_em(
+        self,
+        symbol: str,
+        timeout: Optional[float] = None
+    ) -> pd.DataFrame:
+        """
+        东方财富-个股-股票信息
+        
+        用于补充 stock_list 表，主要包含流通股本、总市值、流通市值等，便于筛选。
+        数据来源: http://quote.eastmoney.com/concept/sh603777.html
+        
+        Args:
+            symbol: 股票代码，6位数字，如 "000001"、"603777"
+                   若传入 ts_code 格式(如 000001.SZ)，会自动提取 6 位代码
+            timeout: 请求超时秒数，默认不设置
+        
+        Returns:
+            pd.DataFrame: 列 item, value，包含最新价、股票代码、股票简称、
+                总股本、流通股、总市值、流通市值、行业、上市时间等
+        """
+        if not self.akshare_enabled:
+            raise DataFlowException("AkShare 未配置或未启用")
+        
+        # 兼容 ts_code 格式，提取 6 位代码
+        code = str(symbol).strip()
+        if "." in code:
+            code = code.split(".")[0]
+        if len(code) != 6 or not code.isdigit():
+            raise DataFlowException(f"股票代码格式错误，需 6 位数字: {symbol}")
+        
+        try:
+            logger.debug(f"获取东财个股信息: {code}")
+            kwargs = {"symbol": code}
+            if timeout is not None:
+                kwargs["timeout"] = timeout
+            
+            df = ak.stock_individual_info_em(**kwargs)
+            
+            if df is None or df.empty:
+                logger.warning(f"未获取到个股信息: {code}")
+                return pd.DataFrame()
+            
+            df = clean_dataframe(df)
+            logger.debug(f"成功获取个股信息: {code}")
+            return df
+            
+        except Exception as e:
+            logger.error(f"获取东财个股信息失败: {e}")
+            raise DataFlowException(f"获取东财个股信息失败: {e}")
+    
     def fetch_money_flow(
         self,
         ts_code: str,
@@ -731,6 +781,170 @@ class MarketDataFetcher:
             logger.error(f"获取社融数据失败: {e}")
             raise DataFlowException(f"获取社融数据失败: {e}")
     
+    def fetch_pmi(
+        self,
+        start_m: str = None,
+        end_m: str = None,
+        m: str = None,
+        fields: str = None
+    ) -> pd.DataFrame:
+        """
+        获取采购经理人指数(PMI)数据
+        
+        Args:
+            start_m: 开始月份（YYYYMM）
+            end_m: 结束月份（YYYYMM）
+            m: 指定月份（YYYYMM），支持多个月份同时输入，逗号分隔
+            fields: 需要获取的字段，如 'month,pmi010000,pmi010400'，默认获取全部字段
+        
+        Returns:
+            PMI数据DataFrame，包含制造业PMI、非制造业PMI等
+        """
+        if not self.tushare_enabled:
+            raise DataFlowException("Tushare未配置或未启用")
+        
+        try:
+            logger.info(f"获取PMI数据: start_m={start_m}, end_m={end_m}, m={m}")
+            
+            if fields:
+                df = self.ts_pro.cn_pmi(
+                    start_m=start_m,
+                    end_m=end_m,
+                    m=m,
+                    fields=fields
+                )
+            else:
+                df = self.ts_pro.cn_pmi(
+                    start_m=start_m,
+                    end_m=end_m,
+                    m=m
+                )
+            
+            if df.empty:
+                logger.warning(f"未获取到PMI数据")
+                return pd.DataFrame()
+            
+            df = clean_dataframe(df)
+            # cn_pmi 实际返回 MONTH（大写），文档写 month；统一为小写 month 便于下游使用
+            sort_col = next((c for c in ('MONTH', 'month', 'm') if c in df.columns), None)
+            if sort_col:
+                df = df.sort_values(sort_col).reset_index(drop=True)
+                if sort_col != 'month':
+                    df = df.rename(columns={sort_col: 'month'})
+            
+            logger.info(f"成功获取 {len(df)} 条PMI数据")
+            return df
+            
+        except Exception as e:
+            logger.error(f"获取PMI数据失败: {e}")
+            raise DataFlowException(f"获取PMI数据失败: {e}")
+    
+    def fetch_m2(
+        self,
+        start_m: str = None,
+        end_m: str = None,
+        m: str = None,
+        fields: str = None
+    ) -> pd.DataFrame:
+        """
+        获取货币供应量月度数据（含M0、M1、M2）
+        
+        Args:
+            start_m: 开始月份（YYYYMM）
+            end_m: 结束月份（YYYYMM）
+            m: 指定月份（YYYYMM），支持多个月份同时输入，逗号分隔
+            fields: 需要获取的字段，如 'month,m0,m1,m2,m2_yoy'，默认获取全部字段
+        
+        Returns:
+            货币供应量DataFrame，包含M0、M1、M2及同比、环比
+        """
+        if not self.tushare_enabled:
+            raise DataFlowException("Tushare未配置或未启用")
+        
+        try:
+            logger.info(f"获取货币供应量数据: start_m={start_m}, end_m={end_m}, m={m}")
+            
+            if fields:
+                df = self.ts_pro.cn_m(
+                    start_m=start_m,
+                    end_m=end_m,
+                    m=m,
+                    fields=fields
+                )
+            else:
+                df = self.ts_pro.cn_m(
+                    start_m=start_m,
+                    end_m=end_m,
+                    m=m
+                )
+            
+            if df.empty:
+                logger.warning(f"未获取到货币供应量数据")
+                return pd.DataFrame()
+            
+            df = clean_dataframe(df)
+            df = df.sort_values('month').reset_index(drop=True)
+            
+            logger.info(f"成功获取 {len(df)} 条货币供应量数据")
+            return df
+            
+        except Exception as e:
+            logger.error(f"获取货币供应量数据失败: {e}")
+            raise DataFlowException(f"获取货币供应量数据失败: {e}")
+    
+    def fetch_gdp(
+        self,
+        start_q: str = None,
+        end_q: str = None,
+        q: str = None,
+        fields: str = None
+    ) -> pd.DataFrame:
+        """
+        获取国民经济GDP数据（季度）
+        
+        Args:
+            start_q: 开始季度（2019Q1 表示 2019 年第一季度）
+            end_q: 结束季度
+            q: 指定季度，支持多个季度同时输入，逗号分隔
+            fields: 需要获取的字段，如 'quarter,gdp,gdp_yoy'，默认获取全部字段
+        
+        Returns:
+            GDP数据DataFrame，包含GDP累计值、同比增速及三次产业数据
+        """
+        if not self.tushare_enabled:
+            raise DataFlowException("Tushare未配置或未启用")
+        
+        try:
+            logger.info(f"获取GDP数据: start_q={start_q}, end_q={end_q}, q={q}")
+            
+            if fields:
+                df = self.ts_pro.cn_gdp(
+                    start_q=start_q,
+                    end_q=end_q,
+                    q=q,
+                    fields=fields
+                )
+            else:
+                df = self.ts_pro.cn_gdp(
+                    start_q=start_q,
+                    end_q=end_q,
+                    q=q
+                )
+            
+            if df.empty:
+                logger.warning(f"未获取到GDP数据")
+                return pd.DataFrame()
+            
+            df = clean_dataframe(df)
+            df = df.sort_values('quarter').reset_index(drop=True)
+            
+            logger.info(f"成功获取 {len(df)} 条GDP数据")
+            return df
+            
+        except Exception as e:
+            logger.error(f"获取GDP数据失败: {e}")
+            raise DataFlowException(f"获取GDP数据失败: {e}")
+    
 
 # 便捷函数（远程获取）
 def fetch_stock_basic(
@@ -896,4 +1110,79 @@ def fetch_sf_month(
     """
     fetcher = MarketDataFetcher()
     return fetcher.fetch_sf_month(start_m, end_m, m)
+
+
+def fetch_pmi(
+    start_m: str = None,
+    end_m: str = None,
+    m: str = None,
+    fields: str = None
+) -> pd.DataFrame:
+    """
+    获取采购经理人指数(PMI)的便捷函数（远程）
+    
+    Args:
+        start_m: 开始月份（YYYYMM）
+        end_m: 结束月份（YYYYMM）
+        m: 指定月份（YYYYMM），支持多个月份同时输入，逗号分隔
+        fields: 需要获取的字段，如 'month,pmi010000,pmi010400'，默认获取全部字段
+    
+    Returns:
+        PMI数据DataFrame，包含制造业PMI、非制造业PMI等
+    
+    Example:
+        >>> df = fetch_pmi(start_m='201901', end_m='202403', fields='month,pmi010000,pmi010400')
+    """
+    fetcher = MarketDataFetcher()
+    return fetcher.fetch_pmi(start_m, end_m, m, fields)
+
+
+def fetch_m2(
+    start_m: str = None,
+    end_m: str = None,
+    m: str = None,
+    fields: str = None
+) -> pd.DataFrame:
+    """
+    获取货币供应量月度数据（含M0、M1、M2）的便捷函数（远程）
+    
+    Args:
+        start_m: 开始月份（YYYYMM）
+        end_m: 结束月份（YYYYMM）
+        m: 指定月份（YYYYMM），支持多个月份同时输入，逗号分隔
+        fields: 需要获取的字段，如 'month,m0,m1,m2,m2_yoy'，默认获取全部字段
+    
+    Returns:
+        货币供应量DataFrame，包含M0、M1、M2及同比、环比
+    
+    Example:
+        >>> df = fetch_m2(start_m='201901', end_m='202403', fields='month,m0,m1,m2,m2_yoy')
+    """
+    fetcher = MarketDataFetcher()
+    return fetcher.fetch_m2(start_m, end_m, m, fields)
+
+
+def fetch_gdp(
+    start_q: str = None,
+    end_q: str = None,
+    q: str = None,
+    fields: str = None
+) -> pd.DataFrame:
+    """
+    获取国民经济GDP数据（季度）的便捷函数（远程）
+    
+    Args:
+        start_q: 开始季度（2019Q1 表示 2019 年第一季度）
+        end_q: 结束季度
+        q: 指定季度，支持多个季度同时输入，逗号分隔
+        fields: 需要获取的字段，如 'quarter,gdp,gdp_yoy'，默认获取全部字段
+    
+    Returns:
+        GDP数据DataFrame，包含GDP累计值、同比增速及三次产业数据
+    
+    Example:
+        >>> df = fetch_gdp(start_q='2018Q1', end_q='2024Q1', fields='quarter,gdp,gdp_yoy')
+    """
+    fetcher = MarketDataFetcher()
+    return fetcher.fetch_gdp(start_q, end_q, q, fields)
 

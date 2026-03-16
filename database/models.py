@@ -3,7 +3,7 @@
 """
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Integer, Text
+from sqlalchemy import Column, DateTime, Float, Integer, Text
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
@@ -25,6 +25,10 @@ class StockList(Base):
     industry = Column(Text, nullable=True, comment="申万行业名称")
     market = Column(Text, nullable=True, comment="市场类型：主板/创业板/科创板/北交所")
     list_date = Column(Integer, nullable=True, comment="上市日期 YYYYMMDD")
+    total_share = Column(Float, nullable=True, comment="总股本（股）")
+    float_share = Column(Float, nullable=True, comment="流通股本（股）")
+    total_mv = Column(Float, nullable=True, comment="总市值（元）")
+    float_mv = Column(Float, nullable=True, comment="流通市值（元）")
     created_at = Column(DateTime, default=_utc_now, comment="记录创建时间")
     updated_at = Column(DateTime, default=_utc_now, onupdate=_utc_now, comment="记录更新时间")
 
@@ -41,6 +45,20 @@ class Industry(Base):
     parent_code = Column(Integer, nullable=True, default=0, comment="父级行业编码，0 表示一级")
     is_pub = Column(Integer, nullable=True, default=1, comment="是否公开，0/1")
     src = Column(Text, nullable=True, comment="数据来源，如 SW2021")
+    created_at = Column(DateTime, default=_utc_now, comment="记录创建时间")
+
+
+class ThsIndex(Base):
+    """同花顺板块指数表（概念、行业、地域、特色、风格、主题、宽基）"""
+
+    __tablename__ = "ths_index"
+
+    ts_code = Column(Text, primary_key=True, comment="指数代码，如 885835.TI")
+    name = Column(Text, nullable=True, comment="指数名称")
+    count = Column(Integer, nullable=True, comment="成分个数")
+    exchange = Column(Text, nullable=True, comment="交易所：A/HK/US")
+    list_date = Column(Text, nullable=True, comment="上市日期 YYYYMMDD")
+    index_type = Column(Text, nullable=True, comment="N概念 I行业 R地域 S特色 ST风格 TH主题 BB宽基")
     created_at = Column(DateTime, default=_utc_now, comment="记录创建时间")
 
 
