@@ -167,6 +167,49 @@ def _get_news_sections_by_date(
     return ([], "fetch")
 
 
+def _get_industry_and_concept_lists() -> tuple:
+    """
+    获取行业名称列表与同花顺概念名称列表，供 LLM 在事件 industry 与 sector_impacts 中选用。
+    优先从数据库读取，否则从 dataflow 拉取。
+    """
+    industry_list: List[str] = []
+    concept_list: List[str] = []
+    try:
+        from database import Industry, ThsIndex
+        from database.config import get_db_session
+
+        with get_db_session() as session:
+            industry_list = [
+                r[0] for r in session.query(Industry.industry_name).filter(
+                    Industry.industry_name.isnot(None)
+                ).distinct().all() if r[0]
+            ]
+            concept_list = [
+                r[0] for r in session.query(ThsIndex.name).filter(
+                    ThsIndex.index_type == "N"
+                ).all() if r[0]
+            ]
+    except Exception as e:
+        logger.debug("从数据库读取行业/概念列表失败，改用 dataflow: %s", e)
+
+    if not industry_list or not concept_list:
+        try:
+            from dataflow.industry_data import fetch_ths_index, get_all_industry_names
+
+            if not industry_list:
+                industry_list = get_all_industry_names()
+            if not concept_list:
+                df = fetch_ths_index(index_type="N")
+                if not df.empty and "name" in df.columns:
+                    concept_list = df["name"].dropna().unique().tolist()
+        except Exception as e:
+            logger.warning("从 dataflow 获取行业/概念列表失败: %s", e)
+
+    industry_list = sorted(set(str(x).strip() for x in industry_list if x))
+    concept_list = sorted(set(str(x).strip() for x in concept_list if x))
+    return industry_list, concept_list
+
+
 def create_news_fetch_node(fetcher: Optional[Any] = None):
     """
     构建新闻获取节点。
@@ -174,8 +217,8 @@ def create_news_fetch_node(fetcher: Optional[Any] = None):
     流程：
     1. 判断 trade_date 是否为交易日，否则返回空 sections 结束图
     2. 从数据库 breakfast_news 表获取新闻：优先 json_file_path，无则按 detail_url 抓取
-    3. 从数据库 industry 表获取完整行业列表
-    4. 输出 sections、all_industries 供 extract 节点使用
+    3. 获取完整行业列表与同花顺概念列表（DB 优先，否则 dataflow）
+    4. 输出 sections、all_industries、ths_concept_list 供 extract / reduce 节点使用
 
     Args:
         fetcher: NewsSentimentFetcher，用于远程抓取新闻详情（必须提供）
@@ -218,24 +261,20 @@ def create_news_fetch_node(fetcher: Optional[Any] = None):
                 "news_sections": [],
             }
 
-        # 4. 从数据库获取完整行业列表，供 extract 节点（LLM 从中选择）
-        try:
-            from database import Industry
-            from database.config import get_db_session
-            with get_db_session() as session:
-                rows = session.query(Industry.industry_name).filter(
-                    Industry.industry_name.isnot(None)
-                ).distinct().all()
-                all_industries = sorted({r[0] for r in rows if r[0]})
-        except Exception as e:
-            logger.warning(f"获取行业列表失败: {e}")
-            all_industries = []
+        # 4. 获取行业列表与同花顺概念列表，供 extract / reduce 节点（LLM 从中选择）
+        all_industries, ths_concept_list = _get_industry_and_concept_lists()
+        logger.info(
+            "新闻分析：已注入行业列表 %d 条、同花顺概念列表 %d 条供 LLM 选用",
+            len(all_industries),
+            len(ths_concept_list),
+        )
         return {
             "messages": [],
             "trade_date": current_date,
             "news_sections": sections,
             "news_source": news_source,
             "all_industries": all_industries,
+            "ths_concept_list": ths_concept_list,
         }
 
     return news_fetch_node
@@ -390,16 +429,24 @@ def create_news_extract_node(llm):
                 "events": []
             }
         
-        # 使用 fetch 节点预先获取的完整行业列表（LLM 做判断，从中选择相关行业）
+        # 使用 fetch 节点预先获取的行业列表与同花顺概念列表（LLM 从中选择）
         all_industries: List[str] = state.get("all_industries", [])
+        ths_concept_list: List[str] = state.get("ths_concept_list", [])
         industry_info = ""
-        if all_industries:
-            industry_info = (
-                "\n\n【可用行业列表】\n"
-                "请从以下完整行业列表中选择与本条新闻相关的行业：\n"
-                f"{', '.join(all_industries)}\n\n"
-                "industry 字段必须是上述列表的子集，不要发明新的行业名称。"
-            )
+        if all_industries or ths_concept_list:
+            parts = []
+            if all_industries:
+                parts.append(
+                    "【行业列表】industry 中的行业名必须从以下列表中选取：\n"
+                    f"{', '.join(all_industries)}"
+                )
+            if ths_concept_list:
+                parts.append(
+                    "\n\n【概念列表】若新闻涉及概念板块，可从以下列表中选取并一并填入 industry：\n"
+                    f"{', '.join(ths_concept_list)}"
+                )
+            parts.append("\n\nindustry 字段必须是上述两个列表的子集，不要自造名称。")
+            industry_info = "\n".join(parts)
         
         system_message = (
             "您是一位专业的金融新闻分析师。您的任务是分析新闻内容，提取关键信息，"
@@ -494,7 +541,7 @@ def create_news_reduce_node(llm):
             "您是一位资深的市场分析师。基于以下事件列表，请分析各板块的影响和宏观环境。\n\n"
             "请返回严格的 JSON 结构化结果，包含以下两部分：\n\n"
             "【板块影响分析 sector_impacts】\n"
-            "字典结构，key 必须是给定行业列表中的行业名称，value 为对象，包含：\n"
+            "字典结构，key 必须从下方提供的【行业列表】或【概念列表】中选取（行业板块与概念板块均可），value 为对象，包含：\n"
             "- sentiment: 板块情绪 (bullish/bearish/neutral)\n"
             "  - bullish: 看涨，预期上涨\n"
             "  - bearish: 看跌，预期下跌\n"
@@ -514,8 +561,8 @@ def create_news_reduce_node(llm):
             "- global_risk: 全球风险 (low/medium/high)\n"
             "- market_sentiment: 市场情绪 (bullish/bearish/neutral)\n\n"
             "【重要要求】\n"
-            "- sector_impacts 中的 key 必须从提供的行业列表中选择，不能发明新行业；\n"
-            "- 至少输出 3 个有代表性的行业影响；\n"
+            "- sector_impacts 中的 key 必须从下方「行业列表」或「概念列表」中选取，不能自造名称；\n"
+            "- 至少输出 3 个有代表性的板块影响（可混合行业与概念）；\n"
             "- 只输出一段 JSON，不能有任何解释文字。"
         )
         
@@ -528,8 +575,9 @@ def create_news_reduce_node(llm):
                 (
                     "human",
                     "事件列表：\n{events}\n\n"
-                    "可用行业列表（只能从中选择作为 sector_impacts 的 key）：\n{industries}\n\n"
-                    "请基于这些事件和行业列表，分析板块影响和宏观环境，并返回 JSON 结果。"
+                    "【行业列表】（sector_impacts 的 key 可从中选取）：\n{industry_list}\n\n"
+                    "【概念列表】（sector_impacts 的 key 可从中选取）：\n{ths_concept_list}\n\n"
+                    "请基于以上事件和两个列表，分析板块影响和宏观环境，并返回 JSON 结果。"
                 ),
             ]
         )
@@ -550,20 +598,20 @@ def create_news_reduce_node(llm):
                 ]
             )
 
-            # 从事件中抽取去重后的行业列表，作为 reduce 阶段的显式输入
-            industries = sorted(
-                {
-                    industry
-                    for event in events
-                    for industry in event.get("industry", [])
-                    if industry
-                }
-            )
+            # 使用 fetch 节点注入的完整行业列表与同花顺概念列表，供 LLM 选取 sector_impacts 的 key
+            industry_list = state.get("all_industries", [])
+            ths_concept_list = state.get("ths_concept_list", [])
+            industry_list_str = ", ".join(industry_list) if industry_list else "（无）"
+            ths_concept_list_str = ", ".join(ths_concept_list) if ths_concept_list else "（无）"
 
             logger.info("正在处理 新闻汇总：事件列表 → 板块影响与宏观环境")
             chain = prompt | llm
             raw = chain.invoke(
-                {"events": events_text, "industries": ", ".join(industries)},
+                {
+                    "events": events_text,
+                    "industry_list": industry_list_str,
+                    "ths_concept_list": ths_concept_list_str,
+                },
                 config={**(config or {}), "run_name": "新闻汇总"},
             )
 

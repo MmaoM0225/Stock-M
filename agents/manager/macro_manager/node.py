@@ -42,7 +42,8 @@ _MACRO_MANAGER_SUMMARY_DEFAULT: Dict[str, Any] = {
     "market_regime": "unknown",
     "market_direction": "unknown",
     "target_position": "unknown",
-    "focus_sectors": [],
+    "focus_industry_sectors": [],
+    "focus_concept_sectors": [],
     "avoid_sectors": [],
     "macro_themes": [],
     "risk_factors": [],
@@ -90,7 +91,13 @@ def _format_manager_summary(d: Dict[str, Any]) -> str:
         lines.append("")
     lines.append(f"- **市场状态**: {d.get('market_regime', '—')}  |  **方向**: {d.get('market_direction', '—')}  |  **建议仓位**: {d.get('target_position', '—')}")
     lines.append(f"- **置信度**: {d.get('confidence', 0)}")
-    for label, key in [("关注板块", "focus_sectors"), ("规避板块", "avoid_sectors"), ("宏观主题", "macro_themes"), ("风险因素", "risk_factors")]:
+    for label, key in [
+        ("关注行业板块", "focus_industry_sectors"),
+        ("关注概念板块", "focus_concept_sectors"),
+        ("规避板块", "avoid_sectors"),
+        ("宏观主题", "macro_themes"),
+        ("风险因素", "risk_factors"),
+    ]:
         val = d.get(key)
         if isinstance(val, list) and val:
             lines.append(f"- **{label}**: {_fmt_list_inline(val)}")
@@ -305,6 +312,47 @@ def create_write_macro_report_node():
     return write_macro_report_node
 
 
+def _get_industry_and_concept_lists() -> Tuple[List[str], List[str]]:
+    """
+    获取行业名称列表与同花顺概念名称列表，供 LLM 输出 focus_industry_sectors / focus_concept_sectors 时选用。
+    优先从数据库读取（需先运行 data_sync），否则从 dataflow 拉取。
+    """
+    industry_list: List[str] = []
+    concept_list: List[str] = []
+    try:
+        from database import Industry, ThsIndex
+        from database.config import get_db_session
+
+        with get_db_session() as session:
+            industry_list = [
+                r.industry_name for r in session.query(Industry.industry_name).distinct().all()
+                if r.industry_name
+            ]
+            concept_list = [
+                r.name for r in session.query(ThsIndex.name).filter(ThsIndex.index_type == "N").all()
+                if r.name
+            ]
+    except Exception as e:
+        logger.debug("从数据库读取行业/概念列表失败，改用 dataflow: %s", e)
+
+    if not industry_list or not concept_list:
+        try:
+            from dataflow.industry_data import fetch_ths_index, get_all_industry_names
+
+            if not industry_list:
+                industry_list = get_all_industry_names()
+            if not concept_list:
+                df = fetch_ths_index(index_type="N")
+                if not df.empty and "name" in df.columns:
+                    concept_list = df["name"].dropna().unique().tolist()
+        except Exception as e:
+            logger.warning("从 dataflow 获取行业/概念列表失败: %s", e)
+
+    industry_list = sorted(set(str(x).strip() for x in industry_list if x))
+    concept_list = sorted(set(str(x).strip() for x in concept_list if x))
+    return industry_list, concept_list
+
+
 def create_macro_summary_node(llm=None):
     """
     构建宏观 Manager 汇总节点。
@@ -312,6 +360,8 @@ def create_macro_summary_node(llm=None):
     使用各分析师输出，调用 LLM 生成：
     - 结构化决策信息（market_regime、market_direction 等）
     - 自然语言宏观总结与（可选）完整 Markdown 报告
+
+    会注入行业列表与同花顺概念列表，要求 LLM 的 focus_industry_sectors / focus_concept_sectors 从该列表中选取。
     """
 
     def macro_summary_node(
@@ -333,8 +383,17 @@ def create_macro_summary_node(llm=None):
         macro_cfg = get_macro_config(config)
         use_llm_for_md = macro_cfg.get("use_llm_for_markdown", MACRO_USE_LLM_FOR_MARKDOWN)
 
+        industry_list, ths_concept_list = _get_industry_and_concept_lists()
+        logger.info(
+            "宏观汇总：已注入行业列表 %d 条、同花顺概念列表 %d 条供 LLM 选用",
+            len(industry_list),
+            len(ths_concept_list),
+        )
+
         payload = {
             "trade_date": trade_date,
+            "industry_list": industry_list,
+            "ths_concept_list": ths_concept_list,
             "news_analysis": state.get("news_analysis"),
             "market_sentiment": state.get("market_sentiment_analyst_summary"),
             "liquidity": state.get("liquidity_analyst_summary"),
@@ -350,18 +409,20 @@ def create_macro_summary_node(llm=None):
 
 重要约束：
 - 结论必须针对**当日数据**，不得写与日期无关的泛化表述。macro_summary 中要体现当日各分析师的关键结论或数据。
-- **focus_sectors**：从当日 news_analysis.sector_impacts（看多/看空板块）、commodity 强势品种对应行业、macro_economy 结论中提炼，输出 2～6 个具体板块或行业名，无则 []。禁止固定写黄金/能源/高股息。
-- **avoid_sectors**：从当日新闻利空板块、宏观/情绪中的谨慎领域提炼，无则 []。禁止固定写高估值科技/可选消费。
-- **macro_themes**：从当日新闻主题、商品走势、宏观结论提炼（如当日油价大涨则可有「通胀/能源」），无则 []。禁止固定写通胀交易/防御配置。
-- **risk_factors**：从当日新闻事件、宏观/流动性结论中提炼具体风险，无则 []。禁止固定写美联储/地缘政治。
+- **focus_industry_sectors**：必须从下方 **industry_list** 中选取。结合当日新闻、市场情绪、流动性、大宗商品、宏观等各分析师结论，输出 2～6 个行业名，无则 []。不可自造行业名。
+- **focus_concept_sectors**：必须从下方 **ths_concept_list** 中选取。结合当日各分析师结论提炼 2～6 个概念板块名，无则 []。不可自造概念名。
+- **avoid_sectors**：从当日新闻利空板块、宏观/情绪中的谨慎领域提炼，无则 []。
+- **macro_themes**：从当日新闻主题、商品走势、宏观结论提炼，无则 []。
+- **risk_factors**：从当日新闻事件、宏观/流动性结论中提炼具体风险，无则 []。
 - 不同交易日输入不同，输出必须随当日数据变化。
 
-JSON 结构（以下为字段说明，内容必须全部来自下方当日数据，勿照抄）：
+JSON 结构（以下为字段说明；focus_industry_sectors / focus_concept_sectors 必须从下方对应列表中选取）：
 {{
   "market_regime": "从当日 liquidity/macro_economy 等综合得出的状态，如 growth_slowdown_liquidity_loose",
   "market_direction": "neutral | bullish | bearish",
   "target_position": "low | medium | high",
-  "focus_sectors": ["从当日数据提炼的板块名"],
+  "focus_industry_sectors": ["从 industry_list 中选取的行业名"],
+  "focus_concept_sectors": ["从 ths_concept_list 中选取的概念名"],
   "avoid_sectors": ["从当日数据提炼的规避板块"],
   "macro_themes": ["从当日数据提炼的主题"],
   "risk_factors": ["从当日新闻与宏观提炼的风险"],
@@ -382,21 +443,23 @@ JSON 结构（以下为字段说明，内容必须全部来自下方当日数据
 
 重要约束：
 - 结论必须针对**当日数据**，不得写与日期无关的泛化表述。macro_summary 中要体现当日各分析师的关键结论或数据。
-- **focus_sectors**：从当日 news_analysis.sector_impacts（看多/看空板块）、commodity 强势品种对应行业、macro_economy 结论中提炼，输出 2～6 个具体板块或行业名，无则 []。禁止固定写黄金/能源/高股息。
-- **avoid_sectors**：从当日新闻利空板块、宏观/情绪中的谨慎领域提炼，无则 []。禁止固定写高估值科技/可选消费。
-- **macro_themes**：从当日新闻主题、商品走势、宏观结论提炼，无则 []。禁止固定写通胀交易/防御配置。
-- **risk_factors**：从当日新闻事件、宏观/流动性结论中提炼具体风险，无则 []。禁止固定写美联储/地缘政治。
+- **focus_industry_sectors**：必须从下方 **industry_list** 中选取。结合当日各分析师结论输出 2～6 个行业名，无则 []。不可自造行业名。
+- **focus_concept_sectors**：必须从下方 **ths_concept_list** 中选取。结合当日各分析师结论输出 2～6 个概念名，无则 []。不可自造概念名。
+- **avoid_sectors**：从当日新闻利空板块、宏观/情绪中的谨慎领域提炼，无则 []。
+- **macro_themes**：从当日新闻主题、商品走势、宏观结论提炼，无则 []。
+- **risk_factors**：从当日新闻事件、宏观/流动性结论中提炼具体风险，无则 []。
 - 不同交易日输入不同，输出必须随当日数据变化。
 
-JSON 结构（以下为字段说明，内容必须全部来自下方当日数据，勿照抄；不要包含 full_report_markdown）：
+JSON 结构（focus_industry_sectors / focus_concept_sectors 必须从下方对应列表中选取；不要包含 full_report_markdown）：
 {{
   "market_regime": "从当日 liquidity/macro_economy 等综合得出的状态",
   "market_direction": "neutral | bullish | bearish",
   "target_position": "low | medium | high",
-  "focus_sectors": ["从当日数据提炼的板块名，禁止写黄金、能源、高股息等固定示例"],
-  "avoid_sectors": ["从当日数据提炼的规避板块，禁止写高估值科技、可选消费等固定示例"],
-  "macro_themes": ["从当日数据提炼的主题，禁止写通胀交易、防御配置等固定示例"],
-  "risk_factors": ["从当日新闻与宏观提炼的风险，禁止写美联储、地缘政治等固定示例"],
+  "focus_industry_sectors": ["从 industry_list 中选取的行业名"],
+  "focus_concept_sectors": ["从 ths_concept_list 中选取的概念名"],
+  "avoid_sectors": ["从当日数据提炼的规避板块"],
+  "macro_themes": ["从当日数据提炼的主题"],
+  "risk_factors": ["从当日新闻与宏观提炼的风险"],
   "confidence": 0.0 到 1.0 之间数字,
   "macro_summary": "2～4 句话，概括当日流动性、情绪、商品、宏观中的关键结论，须有当日数据依据"
 }}

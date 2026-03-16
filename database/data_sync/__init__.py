@@ -4,12 +4,20 @@
 """
 from .breakfast_news import sync_breakfast_news
 from .industry import sync_industry
+from .ths_index import (
+    sync_ths_index,
+    sync_ths_index_all_types,
+    sync_ths_index_by_type,
+)
 
 __all__ = [
     "sync_stock_list",
     "sync_stock_individual_info_em",
     "sync_industry",
     "sync_breakfast_news",
+    "sync_ths_index",
+    "sync_ths_index_by_type",
+    "sync_ths_index_all_types",
 ]
 
 

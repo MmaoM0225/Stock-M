@@ -95,6 +95,50 @@ def fetch_industry_members(
         raise DataFlowException(f"获取行业成分股失败: {e}") from e
 
 
+def fetch_ths_index(
+    ts_code: Optional[str] = None,
+    exchange: Optional[str] = None,
+    index_type: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    获取同花顺板块指数列表（概念、行业、地域、特色、风格、主题、宽基等）。
+
+    数据版权归属同花顺，商业用途需联系同花顺。
+    接口需 6000 积分，单次最大 5000 行，一次可提取全部，请勿循环提取。
+
+    Args:
+        ts_code: 指数代码，可选
+        exchange: 市场类型，A-a股 HK-港股 US-美股
+        index_type: 指数类型
+            N - 概念指数, I - 行业指数, R - 地域指数,
+            S - 同花顺特色指数, ST - 同花顺风格指数,
+            TH - 同花顺主题指数, BB - 同花顺宽基指数
+
+    Returns:
+        列含 ts_code, name, count, exchange, list_date, type 的 DataFrame
+    """
+    try:
+        ts_pro = _get_ts_pro()
+        kwargs = {}
+        if ts_code is not None:
+            kwargs["ts_code"] = ts_code
+        if exchange is not None:
+            kwargs["exchange"] = exchange
+        if index_type is not None:
+            kwargs["type"] = index_type
+        logger.info(f"获取同花顺板块指数: {kwargs}")
+        df = ts_pro.ths_index(**kwargs)
+        if df.empty:
+            logger.warning("未获取到同花顺板块指数")
+            return pd.DataFrame()
+        df = clean_dataframe(df)
+        logger.info(f"成功获取 {len(df)} 条同花顺板块指数")
+        return df
+    except Exception as e:
+        logger.error(f"获取同花顺板块指数失败: {e}")
+        raise DataFlowException(f"获取同花顺板块指数失败: {e}") from e
+
+
 def fetch_stock_industry(
     ts_code: str,
     is_new: str = "Y",

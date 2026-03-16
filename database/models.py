@@ -48,6 +48,20 @@ class Industry(Base):
     created_at = Column(DateTime, default=_utc_now, comment="记录创建时间")
 
 
+class ThsIndex(Base):
+    """同花顺板块指数表（概念、行业、地域、特色、风格、主题、宽基）"""
+
+    __tablename__ = "ths_index"
+
+    ts_code = Column(Text, primary_key=True, comment="指数代码，如 885835.TI")
+    name = Column(Text, nullable=True, comment="指数名称")
+    count = Column(Integer, nullable=True, comment="成分个数")
+    exchange = Column(Text, nullable=True, comment="交易所：A/HK/US")
+    list_date = Column(Text, nullable=True, comment="上市日期 YYYYMMDD")
+    index_type = Column(Text, nullable=True, comment="N概念 I行业 R地域 S特色 ST风格 TH主题 BB宽基")
+    created_at = Column(DateTime, default=_utc_now, comment="记录创建时间")
+
+
 class BreakfastNews(Base):
     """财经早餐表（摘要 + 详情页 URL + 本地 JSON 文件路径）"""
 
