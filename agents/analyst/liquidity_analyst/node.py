@@ -30,9 +30,12 @@ def create_liquidity_fetch_node(market_fetcher=None):
     def liquidity_fetch_node(state: Dict, config: Optional[RunnableConfig] = None) -> Dict:
         trade_date = state.get("trade_date") or datetime.now().strftime("%Y%m%d")
         end_date = trade_date.replace("-", "")[:8]
+        # 日度数据（若后续扩展其他利率或资金面高频指标，可继续使用）
         start_date = date_offset(end_date, days=MACRO_DAILY_LOOKBACK)
+        # 月度数据回溯配置：LPR 实际为月度报价，这里按月份回溯以与宏观经济子图保持一致
         start_m = date_offset(end_date, months=MACRO_MONTH_LOOKBACK)[:6]
         end_m = end_date[:6]
+        lpr_start_date = f"{start_m}01"  # LPR 为月度报价，按月份区间回溯
 
         lpr_data = m2_data = sf_data = None
 
@@ -46,7 +49,8 @@ def create_liquidity_fetch_node(market_fetcher=None):
 
         if market:
             try:
-                lpr_data = market.fetch_shibor_lpr(start_date, end_date)
+                # 使用按月回溯得到的起始日期，避免将 LPR 当作高频日度序列来拉取
+                lpr_data = market.fetch_shibor_lpr(lpr_start_date, end_date)
             except Exception as e:
                 logger.warning("fetch_shibor_lpr 失败: %s", e)
             try:

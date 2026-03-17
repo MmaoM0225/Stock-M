@@ -143,7 +143,7 @@ MACRO_USE_LLM_FOR_MARKDOWN = False  # True=最终报告由 LLM 写（full_report
 NEWS_GENERATE_MARKDOWN = False  # 是否生成 news Markdown 报告
 NEWS_USE_LLM_FOR_MARKDOWN = False  # 是否用 LLM 润色 news MD
 # 宏观管理器配置：同时运行的分析师子图数量上限（避免 API 限流与资源打满）
-MACRO_MANAGER_MAX_CONCURRENT_SUBGRAPHS = 3
+MACRO_MANAGER_MAX_CONCURRENT_SUBGRAPHS = 2
 # 宏观经济分析师配置
 MACRO_USE_US_STOCK_TREND = False  # 是否纳入美股趋势分析
 # 国内市场分析默认指数：指数名称、指数代码、指数描述
