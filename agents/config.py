@@ -13,6 +13,8 @@ load_dotenv()
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
+logger = logging.getLogger(__name__)
+
 # LLM 模型配置
 class LLMConfig:
     """LLM 配置类"""
@@ -23,7 +25,7 @@ class LLMConfig:
                  base_url: str = None,
                  temperature: float = 0.0,
                  max_retries: int = 3,
-                 timeout: int = 60):
+                 timeout: int | None = None):
         """
         初始化 LLM 配置
         
@@ -41,7 +43,9 @@ class LLMConfig:
         self.api_key = self._get_api_key(provider)
         self.temperature = temperature
         self.max_retries = max_retries
-        self.timeout = timeout
+        # 允许通过环境变量覆盖：LLM_TIMEOUT=90
+        env_timeout = os.getenv("LLM_TIMEOUT")
+        self.timeout = timeout if timeout is not None else int(env_timeout) if env_timeout else 90
     
     def _get_api_key(self, provider: str) -> str:
         """
