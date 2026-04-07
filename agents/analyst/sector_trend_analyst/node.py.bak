@@ -1476,35 +1476,78 @@ def _build_trend_map_payload(state: Dict, source: str) -> Dict[str, Any]:
     }
 
 
-def create_sector_trend_insight_node(llm):
-    """
-    构建行业趋势洞察节点（直接基于榜单数据生成最终洞察）。
-    """
-    def _insight_node(state, config=None):
-        rank_all = state.get("sector_trend_rank") or {}
-        rank = rank_all.get("ths_concept") or {}
-
-        trend_board = rank.get("trend_strength_board") or []
-        reversal_board = rank.get("reversal_recovery_board") or []
-        top_risk_board = rank.get("top_reversal_warning_board") or []
-        style_board = rank.get("reversal_recovery_by_style") or {}
-
-        payload = {
-            "trade_date": (state.get("trade_date") or ((state.get("sector_trend_meta") or {}).get("end_date"))),
-            "source": "ths_concept",
-            "source_name": "同花顺概念/板块",
-            "trend_strength_top": [_compact_trend_entry(item) for item in trend_board[:5]],
-            "reversal_recovery_top": [_compact_reversal_entry(item) for item in reversal_board[:5]],
-            "top_reversal_warning_top": [_compact_top_risk_entry(item) for item in top_risk_board[:5]],
-            "reversal_style_summary": _build_reversal_style_summary(style_board),
-        }
-
+def create_sector_trend_llm_map_node(llm, source: Optional[str] = None):
+    def _map_node(state: Dict, config: Optional[RunnableConfig] = None) -> Dict:
+        src = source if source is not None else (state.get("_map_source") or "ths_concept")
+        payload = _build_trend_map_payload(state, src)
+        source_name = payload.get("source_name") or src
         has_content = bool(
             payload.get("trend_strength_top")
             or payload.get("reversal_recovery_top")
             or payload.get("top_reversal_warning_top")
         )
         if not has_content:
+            one = {
+                "source": src,
+                **_SECTOR_TREND_MAP_DEFAULT,
+                "summary": f"无{source_name}榜单数据",
+            }
+            return {"sector_trend_map_results": [one]}
+
+        from langchain_core.prompts import ChatPromptTemplate
+
+        payload_str = json.dumps(payload, ensure_ascii=False, indent=2)
+        system_msg = f"""你是一位行业趋势分析师。下面是「{source_name}」的轻量榜单摘要 JSON，请根据字段做简洁解读。
+
+{_TREND_PAYLOAD_FIELD_DOC}
+
+请重点完成：
+1. 从 trend_strength_top 中归纳当前主线方向与强势共性
+2. 从 reversal_recovery_top 与 reversal_style_summary 中识别值得跟踪的修复机会
+3. 从 top_reversal_warning_top 中识别高位转弱或拥挤风险
+
+返回严格 JSON，只输出 JSON：
+{{{{
+  "summary": "2-3 句话总结当前行业/概念榜单结构",
+  "highlights": ["要点1", "要点2", "要点3"],
+  "main_trends": ["强势主线名称"],
+  "reversal_watchlist": ["反转修复方向名称"],
+  "top_risk_watchlist": ["高位风险方向名称"]
+}}}}
+若无明显规律，可保持列表为空，summary 写“无明显主线”。"""
+        human_msg = """【榜单轻量摘要】
+{payload}
+
+请分析并返回上述 JSON。"""
+
+        prompt = ChatPromptTemplate.from_messages(
+            [("system", system_msg), ("human", human_msg)]
+        )
+        logger.info("正在处理 行业趋势 LLM Map (%s)", src)
+        chain = prompt | llm
+        raw = chain.invoke(
+            {"payload": payload_str},
+            config={**(config or {}), "run_name": f"行业趋势Map_{src}"},
+        )
+        parsed = extract_json_text(raw)
+        for k, v in _SECTOR_TREND_MAP_DEFAULT.items():
+            parsed.setdefault(k, v)
+        return {"sector_trend_map_results": [{"source": src, **parsed}]}
+
+    return _map_node
+
+
+def create_sector_trend_llm_reduce_node(llm):
+    def _reduce_node(state: Dict, config: Optional[RunnableConfig] = None) -> Dict:
+        results = state.get("sector_trend_map_results") or []
+        map_ths = _SECTOR_TREND_MAP_DEFAULT.copy()
+        for item in results:
+            src = item.get("source")
+            row = {k: v for k, v in item.items() if k != "source"}
+            if src == "ths_concept":
+                map_ths = row
+
+        if not map_ths.get("summary"):
             return {
                 "sector_trend_insight": {
                     **_SECTOR_TREND_INSIGHT_DEFAULT,
@@ -1514,18 +1557,19 @@ def create_sector_trend_insight_node(llm):
             }
 
         from langchain_core.prompts import ChatPromptTemplate
-        import json
 
-        payload_str = json.dumps(payload, ensure_ascii=False, indent=2)
-        system_msg = f"""你是一位行业趋势分析师。下面是「同花顺概念/板块」的轻量榜单摘要 JSON，请根据字段做简洁解读并生成最终结论。
+        input_str = f"""【同花顺概念/板块解读】
+summary: {map_ths.get('summary', '')}
+highlights: {map_ths.get('highlights', [])}
+main_trends: {map_ths.get('main_trends', [])}
+reversal_watchlist: {map_ths.get('reversal_watchlist', [])}
+top_risk_watchlist: {map_ths.get('top_risk_watchlist', [])}"""
 
-{_TREND_PAYLOAD_FIELD_DOC}
-
-请重点完成：
-1. 从 trend_strength_top 中归纳当前主线方向与强势共性
-2. 从 reversal_recovery_top 与 reversal_style_summary 中识别值得跟踪的修复机会
-3. 从 top_reversal_warning_top 中识别高位转弱或拥挤风险
-4. 综合判断当前市场更像趋势延续、轮动切换、修复回暖还是风险释放
+        system_msg = """你是一位行业趋势分析师。上面是同花顺概念/板块的榜单解读，请生成一份最终结论，重点回答：
+1. 当前市场更像趋势延续、轮动切换、修复回暖还是风险释放
+2. 哪些方向是主线
+3. 哪些方向值得作为反转修复观察对象
+4. 哪些方向要警惕高位转弱
 
 返回严格 JSON，只输出 JSON：
 {{
@@ -1537,32 +1581,31 @@ def create_sector_trend_insight_node(llm):
   "highlights": ["关键要点"],
   "market_regime": "trend_following | rotation | repair | risk_off | mixed"
 }}
-若无明显规律，market_regime 填 mixed。"""
+若结论分化较大，market_regime 填 mixed。"""
+        human_msg = """{input_text}
 
-        human_msg = """【榜单轻量摘要】
-{payload}
-
-请分析并返回上述 JSON。"""
+请合并为上述 JSON。"""
 
         prompt = ChatPromptTemplate.from_messages(
             [("system", system_msg), ("human", human_msg)]
         )
-        logger.info("正在处理 行业趋势洞察")
+        logger.info("正在处理 行业趋势 LLM Reduce")
         chain = prompt | llm
         raw = chain.invoke(
-            {"payload": payload_str},
-            config={**(config or {}), "run_name": "行业趋势洞察"},
+            {"input_text": input_str},
+            config={**(config or {}), "run_name": "行业趋势Reduce"},
         )
         data = extract_json_text(raw)
         for k, v in _SECTOR_TREND_INSIGHT_DEFAULT.items():
             data.setdefault(k, v)
         return {"sector_trend_insight": data}
 
-    return _insight_node
+    return _reduce_node
 
 
 __all__ = [
     "create_sector_trend_fetch_node",
     "create_sector_trend_analysis_node",
-    "create_sector_trend_insight_node",
+    "create_sector_trend_llm_map_node",
+    "create_sector_trend_llm_reduce_node",
 ]

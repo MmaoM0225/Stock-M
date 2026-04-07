@@ -25,10 +25,6 @@ class StockList(Base):
     industry = Column(Text, nullable=True, comment="申万行业名称")
     market = Column(Text, nullable=True, comment="市场类型：主板/创业板/科创板/北交所")
     list_date = Column(Integer, nullable=True, comment="上市日期 YYYYMMDD")
-    total_share = Column(Float, nullable=True, comment="总股本（股）")
-    float_share = Column(Float, nullable=True, comment="流通股本（股）")
-    total_mv = Column(Float, nullable=True, comment="总市值（元）")
-    float_mv = Column(Float, nullable=True, comment="流通市值（元）")
     created_at = Column(DateTime, default=_utc_now, comment="记录创建时间")
     updated_at = Column(DateTime, default=_utc_now, onupdate=_utc_now, comment="记录更新时间")
 
@@ -75,3 +71,4 @@ class BreakfastNews(Base):
     json_file_path = Column(Text, nullable=True, comment="本地 JSON 文件路径，如 data/news/news_20260309.json")
     created_at = Column(DateTime, default=_utc_now, comment="记录创建时间")
     updated_at = Column(DateTime, default=_utc_now, onupdate=_utc_now, comment="记录更新时间")
+

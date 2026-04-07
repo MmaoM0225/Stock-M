@@ -944,7 +944,124 @@ class MarketDataFetcher:
         except Exception as e:
             logger.error(f"获取GDP数据失败: {e}")
             raise DataFlowException(f"获取GDP数据失败: {e}")
-    
+
+    def fetch_bak_basic(
+        self,
+        trade_date: str,
+        ts_code: str = None,
+        fields: str = None
+    ) -> pd.DataFrame:
+        """
+        获取备用基础列表（每日股票基础数据快照）
+        
+        数据从2016年开始，包含股票名称、行业、地区、PE、PB、股本、财务指标等。
+        适合用于当日股票池筛选。
+        
+        Args:
+            trade_date: 交易日期 YYYYMMDD
+            ts_code: 股票代码（可选）
+            fields: 指定获取的字段，如 'trade_date,ts_code,name,industry,pe,pb'
+                    可选字段: trade_date,ts_code,name,industry,area,pe,float_share,
+                            total_share,total_assets,liquid_assets,fixed_assets,
+                            reserved,reserved_pershare,eps,bvps,pb,list_date,
+                            undp,per_undp,rev_yoy,profit_yoy,gpr,npr,holder_num
+        
+        Returns:
+            pd.DataFrame: 每日股票基础数据
+        
+        Note:
+            - 单次最大 7000 条
+            - 需要至少 5000 积分才可以调取
+            - 数据从 2016 年开始
+        """
+        if not self.tushare_enabled:
+            raise DataFlowException("Tushare未配置或未启用")
+        
+        try:
+            kwargs: Dict[str, Any] = {}
+            if trade_date:
+                kwargs['trade_date'] = format_date(trade_date, 'tushare')
+            if ts_code:
+                kwargs['ts_code'] = ts_code
+            if fields:
+                kwargs['fields'] = fields
+            
+            logger.info(f"获取备用基础列表: trade_date={trade_date}")
+            
+            df = self.ts_pro.bak_basic(**kwargs)
+            
+            if df.empty:
+                logger.warning(f"未获取到备用基础列表数据: trade_date={trade_date}")
+                return pd.DataFrame()
+            
+            df = clean_dataframe(df)
+            
+            logger.info(f"成功获取 {len(df)} 条备用基础列表数据")
+            return df
+            
+        except Exception as e:
+            logger.error(f"获取备用基础列表失败: {e}")
+            raise DataFlowException(f"获取备用基础列表失败: {e}")
+
+    def fetch_ths_member(
+        self,
+        ts_code: str = None,
+        con_code: str = None
+    ) -> pd.DataFrame:
+        """
+        获取同花顺概念板块成分列表
+        
+        数据版权归属同花顺，如做商业用途，请主动联系同花顺。
+        
+        Args:
+            ts_code: 板块指数代码（如 '885800.TI' 消费电子概念）
+            con_code: 股票代码（可选）
+        
+        Returns:
+            pd.DataFrame: 板块成分列表，包含字段:
+                - ts_code: 指数代码
+                - con_code: 股票代码
+                - con_name: 股票名称
+                - weight: 权重(暂无)
+                - in_date: 纳入日期(暂无)
+                - out_date: 剔除日期(暂无)
+                - is_new: 是否最新
+        
+        Note:
+            - 需要至少 6000 积分
+            - 每分钟限制 200 次
+        
+        Example:
+            >>> df = fetcher.fetch_ths_member(ts_code='885800.TI')
+            >>> df = fetcher.fetch_ths_member(con_code='000001.SZ')
+        """
+        if not self.tushare_enabled:
+            raise DataFlowException("Tushare未配置或未启用")
+        
+        try:
+            kwargs: Dict[str, Any] = {}
+            if ts_code:
+                kwargs['ts_code'] = ts_code
+            if con_code:
+                kwargs['con_code'] = con_code
+            
+            logger.info(f"获取同花顺概念板块成分: ts_code={ts_code}, con_code={con_code}")
+            
+            df = self.ts_pro.ths_member(**kwargs)
+            
+            if df.empty:
+                logger.warning(f"未获取到同花顺概念板块成分数据")
+                return pd.DataFrame()
+            
+            df = clean_dataframe(df)
+            
+            logger.info(f"成功获取 {len(df)} 条同花顺概念板块成分数据")
+            return df
+            
+        except Exception as e:
+            logger.error(f"获取同花顺概念板块成分失败: {e}")
+            raise DataFlowException(f"获取同花顺概念板块成分失败: {e}")
+
 
 # 便捷函数（远程获取）
 def fetch_stock_basic(
@@ -1185,4 +1302,31 @@ def fetch_gdp(
     """
     fetcher = MarketDataFetcher()
     return fetcher.fetch_gdp(start_q, end_q, q, fields)
+
+
+def fetch_bak_basic(
+    trade_date: str,
+    ts_code: str = None,
+    fields: str = None
+) -> pd.DataFrame:
+    """
+    获取备用基础列表（每日股票基础数据快照）的便捷函数（远程）
+    
+    数据从2016年开始，包含股票名称、行业、地区、PE、PB、股本、财务指标等。
+    适合用于当日股票池筛选。
+    
+    Args:
+        trade_date: 交易日期 YYYYMMDD
+        ts_code: 股票代码（可选）
+        fields: 指定获取的字段，如 'trade_date,ts_code,name,industry,pe,pb'
+    
+    Returns:
+        每日股票基础数据DataFrame
+    
+    Example:
+        >>> df = fetch_bak_basic('20211012')
+        >>> df = fetch_bak_basic('20211012', fields='trade_date,ts_code,name,industry,pe')
+    """
+    fetcher = MarketDataFetcher()
+    return fetcher.fetch_bak_basic(trade_date, ts_code, fields)
 

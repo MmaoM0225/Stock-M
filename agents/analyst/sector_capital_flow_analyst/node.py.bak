@@ -320,6 +320,101 @@ def create_sector_capital_flow_analysis_node():
 # sector_capital_flow_llm_map (按数据源拆分，单次输入约减半)
 # ---------------------------------------------------------------------------
 
+_SECTOR_FLOW_MAP_DEFAULT = {
+    "summary": "",
+    "highlights": [],
+    "hot_candidates": [],
+    "risk_candidates": [],
+}
+
+_MAP_THS_FIELDS = """【同花顺 ths_concept 每条字段】
+- ts_code、name：代码、名称；days：窗口内交易日天数
+- net_amount_sum：净流入金额(万元)，正=流入负=流出；flow_strength：净流入占买卖比例
+- flow_days_ratio：净流入为正的天数占比；flow_trend_score：趋势斜率，正=流入加大
+- flow_trend_label：趋势标签(inflow_strengthening/weakening、outflow_strengthening/weakening、net_flow_flat)
+- capital_spike：是否异动；capital_flow_score：综合资金评分；window、rank_inflow、rank_outflow
+键 "1d"/"5d"/"10d"/"20d" 为近 1/5/10/20 个交易日窗口；每窗口有 top_inflow（净流入前10）、top_outflow（净流出前10）。"""
+
+_MAP_SW_FIELDS = """【申万 sw_industry 每条字段】
+- ts_code、name、days、window、rank_inflow、rank_outflow：同上
+- flow_strength_sum：窗口内「成交额×涨跌幅」汇总，放量涨为正；flow_strength_avg、amount_sum
+键 "1d"/"5d"/"10d"/"20d" 与 top_inflow、top_outflow 同上。"""
+
+
+def _run_map_for_source(
+    llm,
+    source: str,
+    state: Dict,
+    config: Optional[RunnableConfig],
+) -> Dict:
+    """
+    对单个数据源执行 Map 解读。
+    并行时返回 {"sector_flow_map_results": [{"source": source, **parsed}]} 供 Annotated+operator.add 合并。
+    """
+    field_doc = _MAP_THS_FIELDS if source == "ths_concept" else _MAP_SW_FIELDS
+    source_name = "同花顺概念/板块" if source == "ths_concept" else "申万行业"
+
+    top = state.get("sector_capital_flow_top") or {}
+    data = top.get(source) or {}
+    if not data:
+        one = {"source": source, **_SECTOR_FLOW_MAP_DEFAULT, "summary": f"无{source_name}数据"}
+        return {"sector_flow_map_results": [one]}
+
+    from langchain_core.prompts import ChatPromptTemplate
+
+    data_str = json.dumps(data, ensure_ascii=False, indent=2)
+    system_msg = f"""你是一位板块资金流分析师。下方是「{source_name}」多窗口资金流 Top 的 JSON，请根据字段含义做简短解读。
+
+{field_doc}
+
+解读要点（写入 highlights）：主线方向、资金认可与持续性（flow_days_ratio、flow_trend_label）、短中长期是否一致。再列出 hot_candidates（资金持续流入/强度居前的名称）、risk_candidates（持续流出或需警惕的名称）。
+
+返回严格 JSON，只输出 JSON：
+{{{{
+  "summary": "2-3 句话概括该数据源资金流向",
+  "highlights": ["要点1", "要点2"],
+  "hot_candidates": ["板块/行业名称"],
+  "risk_candidates": ["板块/行业名称"]
+}}}}
+无明确规律时 summary 可写「无明显方向」。"""
+
+    human_msg = """【{source_name} 数据】
+{data}
+
+请分析并返回上述 JSON。"""
+
+    prompt = ChatPromptTemplate.from_messages(
+        [("system", system_msg), ("human", human_msg)]
+    )
+    logger.info("正在处理 板块资金流 LLM Map (%s)", source)
+    chain = prompt | llm
+    raw = chain.invoke(
+        {"data": data_str, "source_name": source_name},
+        config={**(config or {}), "run_name": f"板块资金流Map_{source}"},
+    )
+    parsed = extract_json_text(raw)
+    for k, v in _SECTOR_FLOW_MAP_DEFAULT.items():
+        parsed.setdefault(k, v)
+    one = {"source": source, **parsed}
+    return {"sector_flow_map_results": [one]}
+
+
+def create_sector_capital_flow_llm_map_node(llm, source: Optional[str] = None):
+    """
+    构建板块资金流 Map 节点。
+    - 若传入 source（"ths_concept" 或 "sw_industry"），则固定处理该数据源。
+    - 若 source 为 None，则从 state["_map_source"] 读取数据源（用于 Send 并行时由 payload 指定）。
+    """
+    def _map_node(state: Dict, config: Optional[RunnableConfig] = None) -> Dict:
+        src = source if source is not None else (state.get("_map_source") or "ths_concept")
+        return _run_map_for_source(llm, src, state, config)
+    return _map_node
+
+
+# ---------------------------------------------------------------------------
+# sector_capital_flow_llm_reduce（合并两路 Map 输出为最终报告）
+# ---------------------------------------------------------------------------
+
 _SECTOR_FLOW_INSIGHT_DEFAULT = {
     "summary": "",
     "conclusion": "",
@@ -330,24 +425,26 @@ _SECTOR_FLOW_INSIGHT_DEFAULT = {
 }
 
 
-_MAP_THS_FIELDS = """【同花顺 ths_concept 每条字段】
-- ts_code、name：代码、名称；days：窗口内交易日天数
-- net_amount_sum：净流入金额(万元)，正=流入负=流出；flow_strength：净流入占买卖比例
-- flow_days_ratio：净流入为正的天数占比；flow_trend_score：趋势斜率，正=流入加大
-- flow_trend_label：趋势标签(inflow_strengthening/weakening、outflow_strengthening/weakening、net_flow_flat)
-- capital_spike：是否异动；capital_flow_score：综合资金评分；window、rank_inflow、rank_outflow
-键 "1d"/"5d"/"10d"/"20d" 为近 1/5/10/20 个交易日窗口；每窗口有 top_inflow（净流入前10）、top_outflow（净流出前10）。"""
-
-
-def create_sector_capital_flow_insight_node(llm):
+def create_sector_capital_flow_llm_reduce_node(llm):
     """
-    构建板块资金流洞察节点（直接基于分析数据生成最终洞察）。
+    读取 sector_flow_map_ths 与 sector_flow_map_sw，合并为最终 sector_capital_flow_insight。
     """
-    def _insight_node(state, config=None):
-        top = state.get("sector_capital_flow_top") or {}
-        data = top.get("ths_concept") or {}
-        
-        if not data:
+
+    def _reduce_node(state: Dict, config: Optional[RunnableConfig] = None) -> Dict:
+        # 从并行 Map 合并后的 list 里按 source 拆成 ths / sw
+        results = state.get("sector_flow_map_results") or []
+        map_ths = _SECTOR_FLOW_MAP_DEFAULT.copy()
+        map_sw = _SECTOR_FLOW_MAP_DEFAULT.copy()
+        for item in results:
+            src = item.get("source")
+            row = {k: v for k, v in item.items() if k != "source"}
+            if src == "ths_concept":
+                map_ths = row
+            elif src == "sw_industry":
+                map_sw = row
+
+        # 若两边都无有效 summary，直接给默认结论
+        if not (map_ths.get("summary") or map_sw.get("summary")):
             return {
                 "sector_capital_flow_insight": {
                     **_SECTOR_FLOW_INSIGHT_DEFAULT,
@@ -357,54 +454,57 @@ def create_sector_capital_flow_insight_node(llm):
             }
 
         from langchain_core.prompts import ChatPromptTemplate
-        import json
 
-        data_str = json.dumps(data, ensure_ascii=False, indent=2)
-        system_msg = f"""你是一位板块资金流分析师。下方是「同花顺概念/板块」多窗口资金流 Top 的 JSON，请根据字段含义做解读并生成最终结论。
+        input_str = f"""【同花顺概念/板块解读】
+summary: {map_ths.get('summary', '')}
+highlights: {map_ths.get('highlights', [])}
+hot_candidates: {map_ths.get('hot_candidates', [])}
+risk_candidates: {map_ths.get('risk_candidates', [])}
 
-{_MAP_THS_FIELDS}
+【申万行业解读】
+summary: {map_sw.get('summary', '')}
+highlights: {map_sw.get('highlights', [])}
+hot_candidates: {map_sw.get('hot_candidates', [])}
+risk_candidates: {map_sw.get('risk_candidates', [])}"""
 
-解读要点：
-1. 概括整体资金流向与结构（主线方向、资金认可与持续性）
-2. 判断短中长期是否一致
-3. 列出 hot_sectors（资金持续流入/强度居前的板块名称）
-4. 列出 risk_sectors（持续流出或需警惕的板块名称）
+        system_msg = """你是一位板块资金流分析师。上面是同花顺概念/板块与申万行业的两段分别解读（含 summary、highlights、hot_candidates、risk_candidates）。请合并为一份最终报告：综合两源结论、判断整体市场资金面倾向、归纳热点与风险板块。
 
 返回严格 JSON，只输出 JSON：
 {{
   "summary": "概括整体资金流向与结构",
   "conclusion": "结论（可含操作或观望建议）",
-  "highlights": ["要点1", "要点2"],
+  "highlights": ["合并后的要点，含主线/持续性/拐点等，每条一句"],
   "market_bias": "bullish | neutral | bearish",
-  "hot_sectors": ["热点板块/行业名称列表"],
-  "risk_sectors": ["风险/弱势板块/行业名称列表"]
+  "hot_sectors": ["综合两源后的热点板块/行业名称列表"],
+  "risk_sectors": ["综合两源后的风险/弱势板块/行业名称列表"]
 }}
 market_bias 表示整体资金面偏多/中性/偏空。无明显方向时 market_bias 填 neutral。"""
 
-        human_msg = """【同花顺概念/板块 数据】
-{data}
+        human_msg = """{input_text}
 
-请分析并返回上述 JSON。"""
+请合并为上述 JSON。"""
 
         prompt = ChatPromptTemplate.from_messages(
             [("system", system_msg), ("human", human_msg)]
         )
-        logger.info("正在处理 板块资金流洞察")
+        logger.info("正在处理 板块资金流 LLM Reduce")
         chain = prompt | llm
         raw = chain.invoke(
-            {"data": data_str},
-            config={**(config or {}), "run_name": "板块资金流洞察"},
+            {"input_text": input_str},
+            config={**(config or {}), "run_name": "板块资金流Reduce"},
         )
         data = extract_json_text(raw)
         for k, v in _SECTOR_FLOW_INSIGHT_DEFAULT.items():
             data.setdefault(k, v)
         return {"sector_capital_flow_insight": data}
 
-    return _insight_node
+    return _reduce_node
 
 
 __all__ = [
     "create_sector_capital_flow_fetch_node",
     "create_sector_capital_flow_analysis_node",
-    "create_sector_capital_flow_insight_node",
+    "create_sector_capital_flow_llm_map_node",
+    "create_sector_capital_flow_llm_reduce_node",
 ]
+
