@@ -80,6 +80,51 @@ def validate_stock_code(stock_code: str, market: str = 'cn') -> bool:
     
     return False
 
+
+def normalize_cn_ts_code(raw: str) -> str:
+    """
+    将 A 股代码规范为 Tushare 格式 XXXXXX.SH / .SZ / .BJ。
+
+    已带合法后缀时仅统一后缀大写；仅为 6 位数字时按常见规则补后缀：
+    6 开头 → .SH；0 / 3 开头 → .SZ；200 开头 → .SZ（深 B）；900 开头 → .SH（沪 B）；
+    4 / 8 / 92 开头 → .BJ；其余 9 开头 → .BJ（如 920xxx）。
+    """
+    if raw is None:
+        raise ValueError("股票代码为空")
+    s = str(raw).strip().upper().replace(" ", "")
+    if not s:
+        raise ValueError("股票代码为空")
+
+    if "." in s:
+        parts = s.split(".")
+        if len(parts) != 2:
+            raise ValueError(f"无效股票代码格式: {raw}")
+        sym, suf = parts[0], parts[1]
+        if len(sym) != 6 or not sym.isdigit():
+            raise ValueError(f"无效股票代码: {raw}")
+        if suf not in ("SH", "SZ", "BJ"):
+            raise ValueError(f"不支持的后缀 .{suf}，请使用 SH / SZ / BJ")
+        return f"{sym}.{suf}"
+
+    if len(s) == 6 and s.isdigit():
+        if s.startswith("6"):
+            return f"{s}.SH"
+        if s.startswith("0") or s.startswith("3"):
+            return f"{s}.SZ"
+        if s.startswith("200"):
+            return f"{s}.SZ"
+        if s.startswith("900"):
+            return f"{s}.SH"
+        if s.startswith("4") or s.startswith("8") or s.startswith("92"):
+            return f"{s}.BJ"
+        if s.startswith("9"):
+            return f"{s}.BJ"
+
+    raise ValueError(
+        f"无法识别股票代码: {raw}，请使用 6 位数字或完整格式如 000001.SZ"
+    )
+
+
 def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """
     清理DataFrame数据

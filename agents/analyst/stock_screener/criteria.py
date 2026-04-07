@@ -1,13 +1,24 @@
 """
 筛选条件解析与验证模块
 
-支持从 bak_basic 接口获取的财务指标筛选：
-- PE（市盈率）
-- PB（市净率）
-- 市值（通过股本估算）
+支持以 daily_basic（每日指标）为主的数据筛选：
+- PE / PB
+- 市值（使用 total_mv，Tushare 单位为万元，条件中 min/max 为人民币元）
 """
-from typing import Any, Dict, List, Optional, Union
-from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+
+
+def _normalize_sort_order(raw: Any) -> str:
+    """将 sort_order 统一为 asc / desc，便于校验与下游比较。"""
+    if raw is None:
+        return "desc"
+    s = str(raw).strip().lower()
+    if s in ("asc", "ascending", "正序", "升序"):
+        return "asc"
+    if s in ("desc", "descending", "倒序", "降序"):
+        return "desc"
+    return s
 
 
 @dataclass
@@ -26,7 +37,7 @@ class ScreenerCriteria:
     min_market_cap: Optional[float] = None
     max_market_cap: Optional[float] = None
 
-    # 估值指标（来自 bak_basic 接口）
+    # 估值指标（来自 daily_basic）
     min_pe: Optional[float] = None  # 市盈率下限
     max_pe: Optional[float] = None  # 市盈率上限
     min_pb: Optional[float] = None  # 市净率下限
@@ -34,8 +45,8 @@ class ScreenerCriteria:
 
     # 数量与排序
     max_stocks: int = 100
-    sort_by: str = "total_share"  # total_share, pe, pb
-    sort_order: str = "desc"
+    sort_by: str = "total_mv"  # total_mv, circ_mv, …, dv_ratio, dv_ttm（与 daily_basic 字段一致）
+    sort_order: str = "desc"  # asc 正序 / desc 倒序
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ScreenerCriteria":
@@ -52,8 +63,8 @@ class ScreenerCriteria:
             min_pb=data.get("min_pb"),
             max_pb=data.get("max_pb"),
             max_stocks=data.get("max_stocks", 100),
-            sort_by=data.get("sort_by", "total_share"),
-            sort_order=data.get("sort_order", "desc"),
+            sort_by=data.get("sort_by", "total_mv"),
+            sort_order=_normalize_sort_order(data.get("sort_order", "desc")),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -81,8 +92,30 @@ class ScreenerCriteria:
         if self.max_stocks <= 0:
             errors.append("max_stocks 必须大于0")
 
-        if self.sort_by not in ["total_share", "pe", "pb", "float_share", "eps"]:
+        allowed_sort = [
+            "total_mv",
+            "circ_mv",
+            "total_share",
+            "float_share",
+            "pe",
+            "pb",
+            "close",
+            "eps",
+            "turnover_rate",
+            "volume_ratio",
+            "dv_ratio",
+            "dv_ttm",
+            "pe_ttm",
+            "ps",
+            "ps_ttm",
+        ]
+        if self.sort_by not in allowed_sort:
             errors.append(f"不支持的排序字段: {self.sort_by}")
+
+        if self.sort_order not in ("asc", "desc"):
+            errors.append(
+                f"不支持的排序方向 sort_order: {self.sort_order}，请使用 asc/正序 或 desc/倒序"
+            )
 
         return errors
 
@@ -124,5 +157,7 @@ class ScreenerCriteria:
             filters.append(f"PB:{pb_range}")
 
         filters.append(f"最多{self.max_stocks}只")
+        order_cn = "正序" if self.sort_order == "asc" else "倒序"
+        filters.append(f"排序:{self.sort_by}({order_cn})")
 
         return filters

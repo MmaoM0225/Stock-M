@@ -10,7 +10,8 @@ Stock Screener（股票筛选分析师）Demo
 - min_pe/max_pe: 市盈率范围
 - min_pb/max_pb: 市净率范围
 - max_stocks: 返回股票数量
-- sort_by: 排序字段（total_share/pe/pb）
+- sort_by: total_mv、circ_mv、股本、pe/pe_ttm、pb、ps/ps_ttm、close、dv_ratio/dv_ttm、换手、量比等（同 daily_basic）
+- sort_order: 排序方向，asc/正序/升序 或 desc/倒序/降序（默认 desc）
 """
 import argparse
 import logging
@@ -41,8 +42,6 @@ def _resolve_trade_date(target_date: Optional[datetime]) -> str:
 
 
 def main():
-    from pprint import pprint
-
     logging.basicConfig(level=logging.INFO)
 
     parser = argparse.ArgumentParser(description="Stock Screener Demo：股票筛选")
@@ -59,13 +58,14 @@ def main():
 
     # ========== 筛选条件示例 ==========
     # # 示例1: 大盘股 (100亿以上)
-    # criteria = {
-    #     "trade_date": trade_date,
-    #     "min_market_cap": 100e8,  # 100亿以上
-    #     "exclude_st": True,
-    #     "max_stocks": 20,
-    #     "sort_by": "total_share",
-    # }
+    criteria = {
+        "trade_date": "20260403",
+        "min_market_cap": 100e8,  # 100亿以上
+        "exclude_st": True,
+        "max_stocks": 20,
+        "sort_by": "dv_ratio",
+        "sort_order": "desc",
+    }
 
     # 示例2: 低估值 (PE < 20, PB < 3)
     # criteria = {
@@ -78,13 +78,15 @@ def main():
     # }
 
     # 示例3: 结合板块筛选
-    criteria = {
-        "trade_date": trade_date,
-        "sectors": ["半导体", "食品"],
-        "exclude_st": True,
-        "max_stocks": 50,
-        "sort_by": "total_share",
-    }
+    # criteria = {
+    #     "trade_date": "20260403",
+    #     "sectors": ["共封装光学(CPO)"],
+    #     "min_market_cap": 100e8,
+    #     "exclude_st": True,
+    #     "max_stocks": 50,
+    #     "sort_by": "total_mv",
+    #     "sort_order": "desc",  # 正序：PE 从低到高；倒序用 "desc" 或 "倒序"
+    # }
 
     result = graph.invoke(criteria)
 
@@ -104,18 +106,35 @@ def main():
         for sector, count in sorted(sector_dist.items(), key=lambda x: x[1], reverse=True)[:5]:
             print(f"  {sector}: {count}只")
 
-    # 股票列表（展示关键指标）
+    # 股票列表（daily_basic：总/流通市值为万元，这里展示为亿元人民币）
     print(f"\n股票列表:")
-    print(f"{'代码':<12} {'名称':<10} {'行业':<8} {'PE':>8} {'PB':>8} {'总股本':>8} {'总资产':>10} {'流动资产':>10}")
-    print("-" * 75)
-    for stock in screener_result.get("filtered_stocks", [])[:20]:
-        pe = stock.get("pe", 0) or 0
-        pb = stock.get("pb", 0) or 0
-        share = stock.get("total_share", 0) or 0
-        assets = stock.get("total_assets", 0) or 0
-        liquid = stock.get("liquid_assets", 0) or 0
-        print(f"{stock['ts_code']:<12} {stock['name']:<10} {stock.get('industry', '未知'):<8} "
-              f"{pe:>8.2f} {pb:>8.2f} {share:>8.2f} {assets:>10.2f} {liquid:>10.2f}")
+    hdr = (
+        f"{'代码':<12} {'名称':<10} {'行业':<10} {'收盘':>8} {'PE':>8} {'PB':>8} "
+        f"{'股息率%':>8} {'总股本(万)':>10} {'总市值(亿)':>10} {'流通市(亿)':>10}"
+    )
+    print(hdr)
+    print("-" * max(75, len(hdr)))
+    for stock in screener_result.get("filtered_stocks", []):
+        pe = stock.get("pe") or 0
+        pb = stock.get("pb") or 0
+        close_p = stock.get("close") or 0
+        dv_raw = stock.get("dv_ratio")
+        try:
+            dv_pct = float(dv_raw) if dv_raw is not None else float("nan")
+        except (TypeError, ValueError):
+            dv_pct = float("nan")
+        dv_s = f"{dv_pct:>8.2f}" if dv_pct == dv_pct else f"{'-':>8}"  # 无数据时占位
+        share = stock.get("total_share") or 0
+        tmv = stock.get("total_mv") or 0
+        cmv = stock.get("circ_mv") or 0
+        mv_b = float(tmv) / 10000.0 if tmv else 0.0
+        cv_b = float(cmv) / 10000.0 if cmv else 0.0
+        print(
+            f"{stock['ts_code']:<12} {str(stock.get('name') or ''):<10} "
+            f"{str(stock.get('industry') or '未知'):<10} "
+            f"{float(close_p):>8.2f} {float(pe):>8.2f} {float(pb):>8.2f} "
+            f"{dv_s} {float(share):>10.2f} {mv_b:>10.2f} {cv_b:>10.2f}"
+        )
 
     print("\n" + "=" * 60)
     print(f"共筛选出 {screener_result.get('total_count', 0)} 只股票")

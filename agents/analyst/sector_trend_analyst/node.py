@@ -1528,7 +1528,7 @@ def create_sector_trend_insight_node(llm):
 4. 综合判断当前市场更像趋势延续、轮动切换、修复回暖还是风险释放
 
 返回严格 JSON，只输出 JSON：
-{{
+{{{{
   "summary": "1-2 句话概括整体行业趋势结构",
   "conclusion": "综合判断，可含跟踪建议",
   "leading_themes": ["热点主线名称"],
@@ -1536,7 +1536,7 @@ def create_sector_trend_insight_node(llm):
   "top_risk_sectors": ["高位风险名称"],
   "highlights": ["关键要点"],
   "market_regime": "trend_following | rotation | repair | risk_off | mixed"
-}}
+}}}}
 若无明显规律，market_regime 填 mixed。"""
 
         human_msg = """【榜单轻量摘要】

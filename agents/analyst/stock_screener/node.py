@@ -1,16 +1,85 @@
 """
 Stock Screener（股票筛选分析师）- 节点实现
 
-使用 bak_basic 接口获取每日股票基础数据（包含PE、PB、股本等）
+使用 daily_basic（每日指标）拉取 PE/PB、总市值 total_mv 等；合并 stock_basic 补全名称、行业、上市日。
 """
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import pandas as pd
 
 from .criteria import ScreenerCriteria
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_ths_sector_members(sector_names: List[str]) -> Set[str]:
+    """
+    将同花顺板块名称解析为成分股代码集合（ts_code）。
+
+    仅使用数据库中的 N/I 类型同花顺板块，确保与上游板块口径一致。
+    """
+    if not sector_names:
+        return set()
+
+    try:
+        from database import ThsIndex, get_session
+        from dataflow.market_data import fetch_ths_member
+    except Exception as e:
+        logger.warning("导入同花顺板块依赖失败: %s", e)
+        return set()
+
+    sector_names_clean = [str(x).strip() for x in sector_names if str(x).strip()]
+    if not sector_names_clean:
+        return set()
+
+    session = get_session()
+    try:
+        records = (
+            session.query(ThsIndex)
+            .filter(ThsIndex.index_type.in_(["N", "I"]))
+            .all()
+        )
+    finally:
+        session.close()
+
+    # 同名板块取第一个，避免重复映射导致不确定性
+    name_to_code: Dict[str, str] = {}
+    for r in records:
+        name = (getattr(r, "name", None) or "").strip()
+        code = (getattr(r, "ts_code", None) or "").strip()
+        if name and code and name not in name_to_code:
+            name_to_code[name] = code
+
+    target_codes = [name_to_code[name] for name in sector_names_clean if name in name_to_code]
+    missing_names = [name for name in sector_names_clean if name not in name_to_code]
+    if missing_names:
+        logger.warning("以下板块不在同花顺 N/I 列表中，已跳过: %s", missing_names)
+
+    member_codes: Set[str] = set()
+    for ths_code in target_codes:
+        try:
+            member_df = fetch_ths_member(ts_code=ths_code)
+            if member_df is None or member_df.empty or "con_code" not in member_df.columns:
+                continue
+            one_codes = (
+                member_df["con_code"]
+                .dropna()
+                .astype(str)
+                .str.strip()
+                .tolist()
+            )
+            member_codes.update(code for code in one_codes if code)
+        except Exception as e:
+            logger.warning("获取同花顺板块成分失败: %s, error=%s", ths_code, e)
+
+    logger.info(
+        "同花顺板块过滤准备完成: 输入板块=%d, 命中板块=%d, 成分股=%d",
+        len(sector_names_clean),
+        len(target_codes),
+        len(member_codes),
+    )
+    return member_codes
 
 
 def create_parse_criteria_node():
@@ -30,7 +99,7 @@ def create_parse_criteria_node():
             "min_pb": state.get("min_pb"),
             "max_pb": state.get("max_pb"),
             "max_stocks": state.get("max_stocks", 100),
-            "sort_by": state.get("sort_by", "total_share"),
+            "sort_by": state.get("sort_by", "total_mv"),
             "sort_order": state.get("sort_order", "desc"),
         }
 
@@ -62,7 +131,7 @@ def create_fetch_stock_pool_node():
     """获取初始股票池节点"""
 
     def fetch_stock_pool_node(state: Dict[str, Any]) -> Dict[str, Any]:
-        """从 tushare bak_basic 接口获取指定日期的股票基础数据"""
+        """从 tushare daily_basic 拉取当日指标，并合并 stock_basic 的名称/行业/上市日。"""
         criteria: ScreenerCriteria = state.get("_criteria")
         trade_date = state.get("trade_date")
 
@@ -73,20 +142,34 @@ def create_fetch_stock_pool_node():
             return {**state, "_raw_stock_list": [], "_fetch_error": "缺少交易日期"}
 
         try:
-            from dataflow.market_data import fetch_bak_basic
+            from dataflow.market_data import fetch_daily_basic, fetch_stock_basic
 
-            # 使用 bak_basic 获取当日股票基础数据（含PE、PB、股本、资产等）
-            df = fetch_bak_basic(
-                trade_date=trade_date,
-                fields="trade_date,ts_code,name,industry,area,pe,pb,float_share,total_share,eps,bvps,list_date,total_assets,liquid_assets"
+            daily_fields = (
+                "ts_code,trade_date,close,turnover_rate,turnover_rate_f,volume_ratio,"
+                "pe,pe_ttm,pb,ps,ps_ttm,dv_ratio,dv_ttm,"
+                "total_share,float_share,free_share,total_mv,circ_mv"
             )
+            df_daily = fetch_daily_basic(trade_date=trade_date, fields=daily_fields)
 
-            if df.empty:
+            if df_daily.empty:
                 return {
                     **state,
                     "_raw_stock_list": [],
-                    "_fetch_error": f"未能获取 {trade_date} 的股票数据"
+                    "_fetch_error": f"未能获取 {trade_date} 的 daily_basic 数据",
                 }
+
+            df_basic = fetch_stock_basic(
+                exchange="",
+                list_status="L",
+                fields="ts_code,name,industry,list_date",
+            )
+            if df_basic.empty:
+                logger.warning("stock_basic 为空，名称/行业将为空，ST 过滤可能不完整")
+                df_basic = pd.DataFrame(columns=["ts_code", "name", "industry", "list_date"])
+
+            df = df_daily.merge(df_basic, on="ts_code", how="left")
+            df["name"] = df["name"].fillna("").astype(str)
+            df["industry"] = df["industry"].fillna("").astype(str)
 
             # 基础过滤
             if criteria.exclude_st:
@@ -134,24 +217,26 @@ def create_apply_filters_node():
             # 转换为 DataFrame
             df = pd.DataFrame(raw_stocks)
 
-            # 板块过滤
+            # 板块过滤：仅按同花顺板块（N/I）成分股过滤，保持与上游口径一致
             if criteria.sectors:
-                mask = df["industry"].isin(criteria.sectors)
-                df = df[mask]
+                ths_member_codes = _resolve_ths_sector_members(criteria.sectors)
+                if ths_member_codes:
+                    df = df[df["ts_code"].isin(ths_member_codes)]
+                else:
+                    logger.warning("未解析到同花顺板块成分，板块过滤结果为空")
+                    df = df.iloc[0:0]
                 logger.info(f"板块过滤后: {len(df)} 只")
 
-            # 市值过滤（单位：亿，float_share * 股价 = 流通市值）
-            if criteria.min_market_cap or criteria.max_market_cap:
-                # 使用总股本估算市值（假设股价约10元，bak_basic不返回股价）
-                # 更准确的做法是获取当日行情，但这里用总股本排序近似
-                df["market_cap_approx"] = df["total_share"] * 10  # 粗略估算
-
-                if criteria.min_market_cap:
-                    min_cap = criteria.min_market_cap / 1e8  # 转换为亿
-                    df = df[df["market_cap_approx"] >= min_cap]
-                if criteria.max_market_cap:
-                    max_cap = criteria.max_market_cap / 1e8
-                    df = df[df["market_cap_approx"] <= max_cap]
+            # 市值过滤：daily_basic.total_mv 为万元，条件 min/max 为人民币元
+            if criteria.min_market_cap is not None or criteria.max_market_cap is not None:
+                if "total_mv" not in df.columns:
+                    logger.warning("缺少 total_mv 列，跳过市值过滤")
+                else:
+                    mv_yuan = pd.to_numeric(df["total_mv"], errors="coerce") * 10000.0
+                    if criteria.min_market_cap is not None:
+                        df = df[mv_yuan >= float(criteria.min_market_cap)]
+                    if criteria.max_market_cap is not None:
+                        df = df[mv_yuan <= float(criteria.max_market_cap)]
 
                 logger.info(f"市值过滤后: {len(df)} 只")
 
@@ -174,16 +259,57 @@ def create_apply_filters_node():
                 df["list_date_str"] = df["list_date"].astype(str)
                 df = df[df["list_date_str"] <= cutoff_date]
 
-            # 排序（按总股本近似）
-            sort_column = "total_share" if "total_share" in df.columns else "ts_code"
-            df = df.sort_values(by=sort_column, ascending=(criteria.sort_order == "asc"))
+            # 排序（优先使用配置的 sort_by，缺失时回退）
+            requested_sort = criteria.sort_by or "total_mv"
+            fallback_candidates = [
+                "total_mv",
+                "circ_mv",
+                "total_share",
+                "float_share",
+                "pe",
+                "pe_ttm",
+                "pb",
+                "ps",
+                "ps_ttm",
+                "close",
+                "dv_ratio",
+                "dv_ttm",
+                "turnover_rate",
+                "volume_ratio",
+                "eps",
+                "ts_code",
+            ]
+            sort_candidates = [requested_sort] + [c for c in fallback_candidates if c != requested_sort]
+
+            sort_column = None
+            for candidate in sort_candidates:
+                if candidate not in df.columns:
+                    continue
+                # 避免对全空列排序导致结果不可用
+                if candidate != "ts_code" and df[candidate].notna().sum() == 0:
+                    continue
+                sort_column = candidate
+                break
+
+            if sort_column is None:
+                # 理论上不应发生，作为兜底保护
+                sort_column = "ts_code"
+
+            ascending = (criteria.sort_order == "asc")
+            if sort_column != "ts_code":
+                # 数值字段转为数值，非法值置空，避免混合类型比较报错
+                df[sort_column] = pd.to_numeric(df[sort_column], errors="coerce")
+                # `na_position` 确保无效值被推到末尾，避免干扰前排结果
+                df = df.sort_values(by=sort_column, ascending=ascending, na_position="last")
+            else:
+                df = df.sort_values(by=sort_column, ascending=ascending)
+
+            logger.info(f"排序字段: {requested_sort} -> 实际使用: {sort_column} ({'asc' if ascending else 'desc'})")
 
             # 限制数量
             df = df.head(criteria.max_stocks)
 
             # 清理临时列
-            if "market_cap_approx" in df.columns:
-                df = df.drop(columns=["market_cap_approx"])
             if "list_date_str" in df.columns:
                 df = df.drop(columns=["list_date_str"])
 
@@ -238,14 +364,20 @@ def create_format_output_node():
                 "ts_code": stock.get("ts_code"),
                 "name": stock.get("name"),
                 "industry": stock.get("industry") or "未知",
+                "close": stock.get("close"),
                 "pe": stock.get("pe"),
+                "pe_ttm": stock.get("pe_ttm"),
                 "pb": stock.get("pb"),
                 "total_share": stock.get("total_share"),
                 "float_share": stock.get("float_share"),
-                "eps": stock.get("eps"),
-                "bvps": stock.get("bvps"),
-                "total_assets": stock.get("total_assets"),
-                "liquid_assets": stock.get("liquid_assets"),
+                "total_mv": stock.get("total_mv"),
+                "circ_mv": stock.get("circ_mv"),
+                "turnover_rate": stock.get("turnover_rate"),
+                "volume_ratio": stock.get("volume_ratio"),
+                "dv_ratio": stock.get("dv_ratio"),
+                "dv_ttm": stock.get("dv_ttm"),
+                "ps": stock.get("ps"),
+                "ps_ttm": stock.get("ps_ttm"),
             })
 
         # 统计行业分布

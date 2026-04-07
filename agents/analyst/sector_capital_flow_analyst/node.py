@@ -371,14 +371,14 @@ def create_sector_capital_flow_insight_node(llm):
 4. 列出 risk_sectors（持续流出或需警惕的板块名称）
 
 返回严格 JSON，只输出 JSON：
-{{
+{{{{
   "summary": "概括整体资金流向与结构",
   "conclusion": "结论（可含操作或观望建议）",
   "highlights": ["要点1", "要点2"],
   "market_bias": "bullish | neutral | bearish",
   "hot_sectors": ["热点板块/行业名称列表"],
   "risk_sectors": ["风险/弱势板块/行业名称列表"]
-}}
+}}}}
 market_bias 表示整体资金面偏多/中性/偏空。无明显方向时 market_bias 填 neutral。"""
 
         human_msg = """【同花顺概念/板块 数据】

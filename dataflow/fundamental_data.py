@@ -567,6 +567,105 @@ class FundamentalDataFetcher:
         except Exception as e:
             logger.error(f"获取现金流量表数据失败: {e}")
             raise DataFlowException(f"获取现金流量表数据失败: {e}")
+
+    def fetch_cash_flow(
+        self,
+        ts_code: str,
+        ann_date: str = None,
+        f_ann_date: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        period: str = None,
+        report_type: str = '1',
+        comp_type: str = None,
+        is_calc: int = None,
+        fields: str = None
+    ) -> pd.DataFrame:
+        """
+        兼容别名：调用 fetch_cashflow_statement。
+        """
+        return self.fetch_cashflow_statement(
+            ts_code=ts_code,
+            ann_date=ann_date,
+            f_ann_date=f_ann_date,
+            start_date=start_date,
+            end_date=end_date,
+            period=period,
+            report_type=report_type,
+            comp_type=comp_type,
+            is_calc=is_calc,
+            fields=fields,
+        )
+
+    def fetch_dividend(
+        self,
+        ts_code: str = None,
+        ann_date: str = None,
+        record_date: str = None,
+        ex_date: str = None,
+        imp_ann_date: str = None,
+        fields: str = None
+    ) -> pd.DataFrame:
+        """
+        获取分红送股数据（dividend）。
+
+        Args:
+            ts_code: TS代码
+            ann_date: 公告日
+            record_date: 股权登记日
+            ex_date: 除权除息日
+            imp_ann_date: 实施公告日
+            fields: 指定字段
+        """
+        if not self.tushare_enabled:
+            raise DataFlowException("Tushare未配置或未启用")
+
+        if ts_code and not validate_stock_code(ts_code, 'cn'):
+            raise DataFlowException(f"无效的股票代码: {ts_code}")
+
+        if not any([ts_code, ann_date, record_date, ex_date, imp_ann_date]):
+            raise DataFlowException("ts_code/ann_date/record_date/ex_date/imp_ann_date 至少提供一个")
+
+        try:
+            params = {}
+            if ts_code:
+                params['ts_code'] = ts_code
+            if ann_date:
+                params['ann_date'] = format_date(ann_date, 'tushare')
+            if record_date:
+                params['record_date'] = format_date(record_date, 'tushare')
+            if ex_date:
+                params['ex_date'] = format_date(ex_date, 'tushare')
+            if imp_ann_date:
+                params['imp_ann_date'] = format_date(imp_ann_date, 'tushare')
+
+            if not fields:
+                fields = (
+                    'ts_code,end_date,ann_date,div_proc,stk_div,stk_bo_rate,stk_co_rate,'
+                    'cash_div,cash_div_tax,record_date,ex_date,pay_date,div_listdate,'
+                    'imp_ann_date,base_date,base_share'
+                )
+            params['fields'] = fields
+
+            logger.info(f"获取分红送股数据: {params}")
+            df = self.ts_pro.dividend(**params)
+            if df.empty:
+                logger.warning(f"未获取到分红送股数据: {params}")
+                return pd.DataFrame()
+
+            df = clean_dataframe(df)
+            # 以分红年度+公告日排序，取最近记录更稳定
+            for c in ['end_date', 'ann_date']:
+                if c in df.columns:
+                    df[c] = df[c].astype(str)
+            sort_cols = [c for c in ['end_date', 'ann_date'] if c in df.columns]
+            if sort_cols:
+                df = df.sort_values(sort_cols).reset_index(drop=True)
+            logger.info(f"成功获取 {len(df)} 条分红送股数据")
+            return df
+        except Exception as e:
+            logger.error(f"获取分红送股数据失败: {e}")
+            raise DataFlowException(f"获取分红送股数据失败: {e}")
     
     def fetch_financial_indicators(
         self,
