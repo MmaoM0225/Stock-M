@@ -3,14 +3,21 @@ Commodity Analyst（大宗商品分析师）- 节点函数
 
 专注：原油、黄金、铜、铁矿石等大宗商品价格趋势及宏观含义。
 """
+import json
 import logging
+import os
 from datetime import datetime
-from typing import Dict, Optional, Any
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
 
 logger = logging.getLogger(__name__)
+
+COMMODITY_ARTIFACT_ROOT = (
+    Path("data") / "artifacts" / "analyst" / "macro_analyst" / "commodity_analyst"
+)
 
 from ....config import MACRO_DAILY_LOOKBACK, MACRO_DEFAULT_COMMODITY_CODES
 from ....utils import get_commodity_config, date_offset, to_serializable, resolve_commodity_items, extract_json_text
@@ -267,3 +274,55 @@ def create_commodity_reduce_node(llm=None):
         }
 
     return commodity_reduce_node
+
+
+def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
+    """原子写入 JSON，避免中途中断留下半成品。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, path)
+
+
+def create_commodity_result_persist_node():
+    """将最终输出键 commodity_analyst_summary 持久化到本地 artifacts。"""
+
+    def commodity_result_persist_node(
+        state: Dict[str, Any],
+        config: Optional[RunnableConfig] = None,
+    ) -> Dict[str, Any]:
+        _ = config
+        summary = state.get("commodity_analyst_summary")
+        if not summary:
+            return state
+
+        trade_date = str(state.get("trade_date") or datetime.now().strftime("%Y%m%d")).replace("-", "")[:8]
+        artifact_dir = COMMODITY_ARTIFACT_ROOT / trade_date
+        result_path = artifact_dir / "result.json"
+        manifest_path = artifact_dir / "manifest.json"
+
+        try:
+            _write_json_atomic(result_path, summary)
+            _write_json_atomic(
+                manifest_path,
+                {
+                    "artifact_type": "commodity_analyst_summary",
+                    "module": "agents.analyst.macro_analyst.commodity_analyst",
+                    "trade_date": trade_date,
+                    "created_at": datetime.now().astimezone().isoformat(),
+                    "status": "success",
+                    "result_path": result_path.as_posix(),
+                },
+            )
+            logger.info("commodity_analyst_summary 已写入本地 artifacts: %s", result_path)
+            return {
+                **state,
+                "commodity_artifact_path": result_path.as_posix(),
+                "commodity_manifest_path": manifest_path.as_posix(),
+            }
+        except Exception as e:
+            logger.warning("写入 commodity artifacts 失败: %s", e)
+            return state
+
+    return commodity_result_persist_node

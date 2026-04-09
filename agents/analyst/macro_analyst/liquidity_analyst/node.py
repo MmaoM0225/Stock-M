@@ -3,14 +3,21 @@ Liquidity Analyst（流动性分析师）- 节点函数
 
 专注：利率、市场流动性数据（LPR、M2、社融）。
 """
+import json
 import logging
+import os
 from datetime import datetime
-from typing import Dict, Optional
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
 
 logger = logging.getLogger(__name__)
+
+LIQUIDITY_ARTIFACT_ROOT = (
+    Path("data") / "artifacts" / "analyst" / "macro_analyst" / "liquidity_analyst"
+)
 
 from ....config import MACRO_DAILY_LOOKBACK, MACRO_MONTH_LOOKBACK
 from ....utils import date_offset, to_serializable, extract_json_text
@@ -163,3 +170,55 @@ M2（月度）:
         return {"liquidity_analyst_summary": data}
 
     return liquidity_analysis_node
+
+
+def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
+    """原子写入 JSON，避免中途中断留下半成品。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, path)
+
+
+def create_liquidity_result_persist_node():
+    """将最终输出键 liquidity_analyst_summary 持久化到本地 artifacts。"""
+
+    def liquidity_result_persist_node(
+        state: Dict[str, Any],
+        config: Optional[RunnableConfig] = None,
+    ) -> Dict[str, Any]:
+        _ = config
+        summary = state.get("liquidity_analyst_summary")
+        if not summary:
+            return state
+
+        trade_date = str(state.get("trade_date") or datetime.now().strftime("%Y%m%d")).replace("-", "")[:8]
+        artifact_dir = LIQUIDITY_ARTIFACT_ROOT / trade_date
+        result_path = artifact_dir / "result.json"
+        manifest_path = artifact_dir / "manifest.json"
+
+        try:
+            _write_json_atomic(result_path, summary)
+            _write_json_atomic(
+                manifest_path,
+                {
+                    "artifact_type": "liquidity_analyst_summary",
+                    "module": "agents.analyst.macro_analyst.liquidity_analyst",
+                    "trade_date": trade_date,
+                    "created_at": datetime.now().astimezone().isoformat(),
+                    "status": "success",
+                    "result_path": result_path.as_posix(),
+                },
+            )
+            logger.info("liquidity_analyst_summary 已写入本地 artifacts: %s", result_path)
+            return {
+                **state,
+                "liquidity_artifact_path": result_path.as_posix(),
+                "liquidity_manifest_path": manifest_path.as_posix(),
+            }
+        except Exception as e:
+            logger.warning("写入 liquidity artifacts 失败: %s", e)
+            return state
+
+    return liquidity_result_persist_node
