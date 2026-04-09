@@ -14,6 +14,8 @@ def extract_json_text(raw) -> Dict[str, Any]:
     从 LLM 原始返回中提取 JSON 文本并解析。
     兼容 BaseMessage / dict / 纯字符串，以及 ```json 包裹的情况。
     """
+    # 尽量做到「解析失败也返回空 dict」，避免在上层节点中抛出异常导致整个子图失败。
+    # 详细错误交由调用方通过日志/默认值处理。
     if isinstance(raw, dict) and "content" in raw:
         text = raw["content"]
     else:
@@ -27,8 +29,13 @@ def extract_json_text(raw) -> Dict[str, Any]:
             lines = lines[:-1]
         text = "\n".join(lines).strip()
     if not text:
-        raise ValueError("LLM 输出为空，无法解析为 JSON")
-    return json.loads(text)
+        # 返回空 dict，让调用方按默认值处理；同时保留尽量清晰的错误信息在调用栈日志中。
+        return {}
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # 解析失败时同样返回空 dict，由上层节点填充默认字段或走降级逻辑
+        return {}
 
 
 def is_trading_day(date_str: str) -> bool:

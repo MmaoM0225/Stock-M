@@ -3,8 +3,8 @@
 
 可以直接运行本文件，查看 map-reduce 子图是否能够正确运行：
 
-    python -m agents.analyst.news_analyst.demo
-    python -m agents.analyst.news_analyst.demo 20260305
+    python -m agents.analyst.macro_analyst.news_analyst.demo
+    python -m agents.analyst.macro_analyst.news_analyst.demo 20260305
 """
 
 from typing import Any, Dict, List, Optional

@@ -1,6 +1,5 @@
 """
-分析型 Agent 子包。
+Analyst agent package.
 
-包含新闻、宏观等各类分析 Agent 实现。
+Subpackages are grouped by macro, sector, and stock analysis layers.
 """
-

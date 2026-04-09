@@ -1,8 +1,8 @@
 """
 Liquidity Analyst（流动性分析师）Demo。
 
-    python -m agents.analyst.liquidity_analyst.demo
-    python -m agents.analyst.liquidity_analyst.demo 20260305
+    python -m agents.analyst.macro_analyst.liquidity_analyst.demo
+    python -m agents.analyst.macro_analyst.liquidity_analyst.demo 20260305
 """
 
 import re

@@ -1,19 +1,15 @@
-from typing import Dict, Any, List, Optional
-from typing_extensions import Annotated, TypedDict
 import operator
+from typing import Any, Dict, List, Optional
 
-from langchain_core.runnables import RunnableConfig
+from typing_extensions import Annotated, TypedDict
+
 from langgraph.graph import StateGraph, START, END
-
-from ...config import NEWS_GENERATE_MARKDOWN
-from ...utils import get_news_config
 
 from .node import (
     create_news_fetch_node,
     map_sections_to_extract,
     create_news_extract_node,
     create_news_reduce_node,
-    create_news_markdown_write_node,
 )
 
 
@@ -35,14 +31,6 @@ class NewsState(TypedDict, total=False):
     events: Annotated[List[Dict[str, Any]], operator.add]
     news_analysis: Dict[str, Any]
     messages: List[Any]
-
-
-def _route_after_news_reduce(state: Dict[str, Any], config: RunnableConfig | None = None) -> str:
-    """news_reduce 之后：若配置 generate_markdown 则进入 markdown_write，否则 END。"""
-    cfg = get_news_config(config) if config else {}
-    generate = cfg.get("generate_markdown", NEWS_GENERATE_MARKDOWN)
-    return "news_markdown_write" if generate else END
-
 
 def create_news_graph(llm, fetcher: Optional[Any] = None):
     """
@@ -77,9 +65,7 @@ def create_news_graph(llm, fetcher: Optional[Any] = None):
     # 每个 extract 完成后，将事件写入 events，LangGraph 会按 Annotated 规则自动累加
     builder.add_edge("news_extract", "news_reduce")
 
-    # 汇总节点输出最终分析结果；根据配置决定是否写入 Markdown
-    builder.add_node("news_markdown_write", create_news_markdown_write_node(llm))
-    builder.add_conditional_edges("news_reduce", _route_after_news_reduce)
-    builder.add_edge("news_markdown_write", END)
+    # 汇总节点输出最终分析结果后直接结束
+    builder.add_edge("news_reduce", END)
 
     return builder.compile()

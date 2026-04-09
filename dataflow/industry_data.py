@@ -139,6 +139,316 @@ def fetch_ths_index(
         raise DataFlowException(f"获取同花顺板块指数失败: {e}") from e
 
 
+def fetch_moneyflow_cnt_ths(
+    ts_code: Optional[str] = None,
+    trade_date: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    获取同花顺概念板块每日资金流向。
+
+    数据版权归属同花顺。接口需 6000 积分，单次最大 5000 条；
+    若按日期区间拉取且超过单次限量，可配合 fetch_moneyflow_cnt_ths_range 按日循环。
+
+    Args:
+        ts_code: 板块代码，可选
+        trade_date: 交易日期 YYYYMMDD，可选
+        start_date: 开始日期 YYYYMMDD，可选
+        end_date: 结束日期 YYYYMMDD，可选
+
+    Returns:
+        列含 trade_date, ts_code, name, lead_stock, close_price, pct_change,
+        industry_index, company_num, pct_change_stock, net_buy_amount,
+        net_sell_amount, net_amount 的 DataFrame
+    """
+    try:
+        ts_pro = _get_ts_pro()
+        kwargs = {}
+        if ts_code is not None:
+            kwargs["ts_code"] = ts_code
+        if trade_date is not None:
+            kwargs["trade_date"] = trade_date.replace("-", "")[:8]
+        if start_date is not None:
+            kwargs["start_date"] = start_date.replace("-", "")[:8]
+        if end_date is not None:
+            kwargs["end_date"] = end_date.replace("-", "")[:8]
+        if not kwargs:
+            raise DataFlowException("moneyflow_cnt_ths 至少需要提供 ts_code、trade_date、start_date/end_date 之一")
+        logger.info("获取同花顺概念板块资金流向: %s", kwargs)
+        df = ts_pro.moneyflow_cnt_ths(**kwargs)
+        if df.empty:
+            logger.warning("未获取到同花顺概念板块资金流向")
+            return pd.DataFrame()
+        df = clean_dataframe(df)
+        logger.info("成功获取 %d 条同花顺概念板块资金流向", len(df))
+        return df
+    except DataFlowException:
+        raise
+    except Exception as e:
+        logger.error("获取同花顺概念板块资金流向失败: %s", e)
+        raise DataFlowException(f"获取同花顺概念板块资金流向失败: {e}") from e
+
+
+def fetch_moneyflow_cnt_ths_range(
+    start_date: str,
+    end_date: str,
+    ts_code: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    按日循环获取同花顺概念板块资金流向，避免单次超过 5000 条限量。
+
+    Args:
+        start_date: 开始日期 YYYYMMDD
+        end_date: 结束日期 YYYYMMDD
+        ts_code: 板块代码，可选，不传则拉取全部板块
+
+    Returns:
+        合并后的 DataFrame
+    """
+    from datetime import datetime, timedelta
+
+    start = start_date.replace("-", "")[:8]
+    end = end_date.replace("-", "")[:8]
+    if start > end:
+        raise DataFlowException("start_date 不能晚于 end_date")
+    d = datetime.strptime(start, "%Y%m%d")
+    end_d = datetime.strptime(end, "%Y%m%d")
+    frames: List[pd.DataFrame] = []
+    while d <= end_d:
+        # 跳过周末等明显非交易日，避免无意义请求与警告日志
+        if d.weekday() >= 5:
+            d += timedelta(days=1)
+            continue
+        day = d.strftime("%Y%m%d")
+        kwargs: dict = {"trade_date": day}
+        if ts_code is not None:
+            kwargs["ts_code"] = ts_code
+        try:
+            df = fetch_moneyflow_cnt_ths(**kwargs)
+            if not df.empty:
+                frames.append(df)
+        except Exception as e:
+            logger.warning("获取 %s 资金流向失败: %s", day, e)
+        d += timedelta(days=1)
+    if not frames:
+        return pd.DataFrame()
+    out = pd.concat(frames, ignore_index=True)
+    logger.info("资金流向区间 %s～%s 共 %d 条", start, end, len(out))
+    return out
+
+
+def fetch_sw_daily(
+    ts_code: Optional[str] = None,
+    trade_date: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    fields: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    获取申万行业日线行情（默认申万2021版）。
+
+    数据版权归属申万 / Tushare。接口需 5000 积分，
+    单次最大 4000 行，可按指数代码和日期参数循环提取。
+
+    Args:
+        ts_code: 行业代码，可选，如 801010.SI
+        trade_date: 交易日期 YYYYMMDD，可选
+        start_date: 开始日期 YYYYMMDD，可选
+        end_date: 结束日期 YYYYMMDD，可选
+        fields: Tushare 字段列表字符串，可选；不传则取全部字段
+
+    Returns:
+        包含 ts_code, trade_date, name, open, high, low, close, change,
+        pct_change, vol, amount, pe, pb, float_mv, total_mv 等列的 DataFrame
+    """
+    try:
+        ts_pro = _get_ts_pro()
+        kwargs: dict = {}
+        if ts_code is not None:
+            kwargs["ts_code"] = ts_code
+        if trade_date is not None:
+            kwargs["trade_date"] = trade_date.replace("-", "")[:8]
+        if start_date is not None:
+            kwargs["start_date"] = start_date.replace("-", "")[:8]
+        if end_date is not None:
+            kwargs["end_date"] = end_date.replace("-", "")[:8]
+        if fields is not None:
+            kwargs["fields"] = fields
+        if not kwargs:
+            raise DataFlowException("sw_daily 至少需要提供 ts_code、trade_date、start_date/end_date 之一")
+
+        logger.info("获取申万行业日线行情: %s", kwargs)
+        df = ts_pro.sw_daily(**kwargs)
+        if df.empty:
+            logger.warning("未获取到申万行业日线行情")
+            return pd.DataFrame()
+        df = clean_dataframe(df)
+        logger.info("成功获取 %d 条申万行业日线行情", len(df))
+        return df
+    except DataFlowException:
+        raise
+    except Exception as e:
+        logger.error("获取申万行业日线行情失败: %s", e)
+        raise DataFlowException(f"获取申万行业日线行情失败: {e}") from e
+
+
+def fetch_sw_daily_range(
+    start_date: str,
+    end_date: str,
+    ts_code: Optional[str] = None,
+    fields: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    按日循环获取申万行业日线行情，避免单次超过 4000 行限量。
+
+    Args:
+        start_date: 开始日期 YYYYMMDD
+        end_date: 结束日期 YYYYMMDD
+        ts_code: 行业代码，可选，不传则拉取全部行业
+        fields: Tushare 字段列表字符串，可选
+
+    Returns:
+        合并后的 DataFrame
+    """
+    from datetime import datetime, timedelta
+
+    start = start_date.replace("-", "")[:8]
+    end = end_date.replace("-", "")[:8]
+    if start > end:
+        raise DataFlowException("start_date 不能晚于 end_date")
+
+    d = datetime.strptime(start, "%Y%m%d")
+    end_d = datetime.strptime(end, "%Y%m%d")
+    frames: List[pd.DataFrame] = []
+    while d <= end_d:
+        day = d.strftime("%Y%m%d")
+        kwargs: dict = {"trade_date": day}
+        if ts_code is not None:
+            kwargs["ts_code"] = ts_code
+        if fields is not None:
+            kwargs["fields"] = fields
+        try:
+            df = fetch_sw_daily(**kwargs)
+            if not df.empty:
+                frames.append(df)
+        except Exception as e:
+            logger.warning("获取 %s 申万行业行情失败: %s", day, e)
+        d += timedelta(days=1)
+
+    if not frames:
+        return pd.DataFrame()
+    out = pd.concat(frames, ignore_index=True)
+    logger.info("申万行业行情区间 %s～%s 共 %d 条", start, end, len(out))
+    return out
+
+
+def fetch_ths_daily(
+    ts_code: Optional[str] = None,
+    trade_date: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    fields: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    获取同花顺板块指数行情。
+
+    数据版权归属同花顺。接口需 6000 积分，
+    单次最大 3000 行数据，可根据指数代码、日期参数循环提取。
+
+    Args:
+        ts_code: 指数代码，可选，如 865001.TI
+        trade_date: 交易日期 YYYYMMDD，可选
+        start_date: 开始日期 YYYYMMDD，可选
+        end_date: 结束日期 YYYYMMDD，可选
+        fields: Tushare 字段列表字符串，可选；不传则取全部字段
+
+    Returns:
+        包含 ts_code, trade_date, close, open, high, low, pre_close,
+        avg_price, change, pct_change, vol, turnover_rate, total_mv,
+        float_mv 等列的 DataFrame
+    """
+    try:
+        ts_pro = _get_ts_pro()
+        kwargs: dict = {}
+        if ts_code is not None:
+            kwargs["ts_code"] = ts_code
+        if trade_date is not None:
+            kwargs["trade_date"] = trade_date.replace("-", "")[:8]
+        if start_date is not None:
+            kwargs["start_date"] = start_date.replace("-", "")[:8]
+        if end_date is not None:
+            kwargs["end_date"] = end_date.replace("-", "")[:8]
+        if fields is not None:
+            kwargs["fields"] = fields
+        if not kwargs:
+            raise DataFlowException("ths_daily 至少需要提供 ts_code、trade_date、start_date/end_date 之一")
+
+        logger.info("获取同花顺板块指数行情: %s", kwargs)
+        df = ts_pro.ths_daily(**kwargs)
+        if df.empty:
+            logger.warning("未获取到同花顺板块指数行情")
+            return pd.DataFrame()
+        df = clean_dataframe(df)
+        logger.info("成功获取 %d 条同花顺板块指数行情", len(df))
+        return df
+    except DataFlowException:
+        raise
+    except Exception as e:
+        logger.error("获取同花顺板块指数行情失败: %s", e)
+        raise DataFlowException(f"获取同花顺板块指数行情失败: {e}") from e
+
+
+def fetch_ths_daily_range(
+    start_date: str,
+    end_date: str,
+    ts_code: Optional[str] = None,
+    fields: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    按日循环获取同花顺板块指数行情，避免单次超过 3000 行限量。
+
+    Args:
+        start_date: 开始日期 YYYYMMDD
+        end_date: 结束日期 YYYYMMDD
+        ts_code: 指数代码，可选，不传则拉取全部板块指数
+        fields: Tushare 字段列表字符串，可选
+
+    Returns:
+        合并后的 DataFrame
+    """
+    from datetime import datetime, timedelta
+
+    start = start_date.replace("-", "")[:8]
+    end = end_date.replace("-", "")[:8]
+    if start > end:
+        raise DataFlowException("start_date 不能晚于 end_date")
+
+    d = datetime.strptime(start, "%Y%m%d")
+    end_d = datetime.strptime(end, "%Y%m%d")
+    frames: List[pd.DataFrame] = []
+    while d <= end_d:
+        day = d.strftime("%Y%m%d")
+        kwargs: dict = {"trade_date": day}
+        if ts_code is not None:
+            kwargs["ts_code"] = ts_code
+        if fields is not None:
+            kwargs["fields"] = fields
+        try:
+            df = fetch_ths_daily(**kwargs)
+            if not df.empty:
+                frames.append(df)
+        except Exception as e:
+            logger.warning("获取 %s 同花顺板块指数行情失败: %s", day, e)
+        d += timedelta(days=1)
+
+    if not frames:
+        return pd.DataFrame()
+    out = pd.concat(frames, ignore_index=True)
+    logger.info("同花顺板块指数行情区间 %s～%s 共 %d 条", start, end, len(out))
+    return out
+
+
 def fetch_stock_industry(
     ts_code: str,
     is_new: str = "Y",

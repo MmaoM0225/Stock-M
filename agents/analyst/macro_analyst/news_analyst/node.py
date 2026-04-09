@@ -1,10 +1,8 @@
-import os
-
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from langchain_core.runnables import RunnableConfig
 
-from ...utils import extract_json_text, is_trading_day, get_news_config
+from ...utils import extract_json_text, is_trading_day
 from langgraph.constants import Send
 from langgraph.graph import END
 import json
@@ -294,126 +292,6 @@ def reduce_events(state, update):
     if new_events:
         events.extend(new_events)
         return {"events": events}
-
-
-def _build_news_analysis_md_programmatic(analysis_result: Dict) -> str:
-    """程序化拼接新闻分析 Markdown。"""
-    trade_date = analysis_result.get("date", datetime.now().strftime("%Y%m%d"))
-    events = analysis_result.get("events", [])
-    sector_impacts = analysis_result.get("sector_impacts", {})
-    macro = analysis_result.get("macro_environment", {})
-
-    lines = [
-        f"# 新闻分析报告 {trade_date}",
-        "",
-        "## 一、宏观环境",
-        "",
-    ]
-    if macro:
-        for k, v in macro.items():
-            lines.append(f"- **{k}**: {v}")
-        lines.append("")
-    else:
-        lines.append("（无宏观环境数据）\n")
-
-    lines.extend(["---", "", "## 二、板块影响", ""])
-    if sector_impacts:
-        for sector, info in sector_impacts.items():
-            lines.append(f"### {sector}")
-            lines.append(f"- 情绪: {info.get('sentiment', '')}")
-            lines.append(f"- 置信度: {info.get('confidence', '')}")
-            for r in info.get("reason", []):
-                lines.append(f"  - {r}")
-            lines.append("")
-    else:
-        lines.append("（无板块影响数据）\n")
-
-    lines.extend(["---", "", "## 三、事件列表", ""])
-    for i, ev in enumerate(events, 1):
-        lines.append(f"{i}. **{ev.get('summary', '')}**")
-        lines.append(f"   - 类型: {ev.get('event_type', ev.get('type', 'unknown'))}, 情绪: {ev.get('sentiment', '')}, 影响: {ev.get('impact_level', '')}")
-        lines.append(f"   - 行业: {', '.join(ev.get('industry', []))}")
-        lines.append("")
-
-    lines.extend([
-        "---",
-        "",
-        "## 报告元数据",
-        "",
-        f"- 报告日期: {trade_date}",
-        f"- 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-        "",
-    ])
-    return "\n".join(lines)
-
-
-def _build_news_analysis_md_with_llm(analysis_result: Dict, llm, trade_date: str) -> Optional[str]:
-    """用 LLM 总结生成新闻分析 Markdown，风格为分析式报告（与程序化拼接的列表式区分）。"""
-    try:
-        system_msg = (
-            "你是一位金融新闻分析师。请根据提供的结构化分析数据，撰写一份**分析式、可读性强的日报**，"
-            "不要照抄或罗列原始字段，而是写成给人看的解读报告。\n\n"
-            "【风格要求】\n"
-            "1. 开头用 2～4 句话写「今日要点」或「核心结论」，概括宏观环境与市场情绪。\n"
-            "2. 宏观环境：用一两段话解读流动性、政策倾向、全球风险、市场情绪的含义与组合影响，不要只写「liquidity: neutral」这种键值。\n"
-            "3. 板块与事件：按重要性或逻辑分块（如「地缘与能源」「产业与政策」「市场与资金」等），每块用段落+要点简述，突出因果与对投资的含义。\n"
-            "4. 事件不必逐条罗列，可归纳为几类并挑重点事件说明。\n"
-            "5. 全文 Markdown：适当用二级、三级标题和加粗，结尾注明「报告日期」和「生成时间」。\n"
-            "6. 标题用「# 新闻分析报告 {date}」，其余结构由你组织，不必与数据字段一一对应。直接输出完整 Markdown，不要输出其他说明。"
-        ).format(date=trade_date)
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", system_msg),
-            ("human", "当日新闻分析数据（JSON）：\n{data}\n\n请据此撰写一份分析式 Markdown 报告。"),
-        ])
-        logger.info("news_markdown: LLM 生成新闻报告")
-        chain = prompt | llm
-        raw = chain.invoke({"data": json.dumps(analysis_result, ensure_ascii=False, indent=2, default=str)})
-        text = raw.content if hasattr(raw, "content") else str(raw)
-        if "报告日期" not in text and "生成时间" not in text:
-            text += f"\n\n---\n\n## 报告元数据\n\n- 报告日期: {trade_date}\n- 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-        return text.strip()
-    except Exception as e:
-        logger.warning("LLM 生成新闻 Markdown 失败: %s，回退到程序化输出", e)
-        return None
-
-
-def _write_news_analysis_md(
-    analysis_result: Dict, trade_date: str, llm=None, use_llm_for_md: bool = False
-) -> Optional[str]:
-    """写入 data/analysis/YYYYMMDD_news_analysis.md。use_llm_for_md=True 时用 LLM 润色。"""
-    try:
-        md_content = None
-        if use_llm_for_md and llm:
-            md_content = _build_news_analysis_md_with_llm(analysis_result, llm, trade_date)
-        if md_content is None:
-            md_content = _build_news_analysis_md_programmatic(analysis_result)
-        out_dir = os.path.join("data", "analysis")
-        os.makedirs(out_dir, exist_ok=True)
-        path = os.path.join(out_dir, f"{trade_date}_news_analysis.md")
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(md_content)
-        logger.info("新闻分析报告已写入: %s", path)
-        return path
-    except Exception as e:
-        logger.warning("写入新闻分析 MD 失败: %s", e)
-        return None
-
-
-def create_news_markdown_write_node(llm=None):
-    """构建新闻 Markdown 报告写入节点。由 configurable.news_config.generate_markdown 控制是否执行（由 graph 条件边决定）。"""
-    from ...config import NEWS_USE_LLM_FOR_MARKDOWN
-
-    def news_markdown_write_node(state, config: Optional[RunnableConfig] = None) -> Dict:
-        analysis_result = state.get("news_analysis")
-        if not analysis_result:
-            return {}
-        trade_date = analysis_result.get("date", datetime.now().strftime("%Y%m%d"))
-        cfg = get_news_config(config) or {}
-        use_llm = cfg.get("use_llm_for_markdown", NEWS_USE_LLM_FOR_MARKDOWN)
-        _write_news_analysis_md(analysis_result, trade_date, llm=llm, use_llm_for_md=use_llm)
-        return {}
-
-    return news_markdown_write_node
 
 
 def create_news_extract_node(llm):
