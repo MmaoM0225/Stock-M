@@ -96,6 +96,9 @@ def main():
         print(f"\n=== {key} ===")
         pprint(result.get(key))
 
+    print("\n=== macro_manager_summary ===")
+    pprint(result.get("macro_manager_summary"))
+
 
 if __name__ == "__main__":
     main()

@@ -141,7 +141,9 @@
 
 - 当前未发现独立本地结果文件命名规则
 - 当前结果主要停留在运行态 state 中，输出键为 `macro_manager_summary`
-- 后续如果做缓存，主键应至少包含 `trade_date`
+- 当前会优先读取宏观层 5 个 analyst 的 `result.json`
+- 当前策略是：加载已有 analyst artifacts → 仅补跑缺失 analyst → 重新生成 `macro_manager_summary`
+- manager 自身目前不单独写入 `result.json`
 
 ### `agents.manager.sector_manager`
 

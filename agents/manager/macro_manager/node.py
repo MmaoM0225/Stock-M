@@ -5,8 +5,10 @@ run_analysts：并行调用多个分析师子图（带最大并发限制），�
 """
 import json
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_core.prompts import ChatPromptTemplate
@@ -15,6 +17,16 @@ from langchain_core.runnables import RunnableConfig
 from ...utils import extract_json_text
 
 logger = logging.getLogger(__name__)
+
+_MACRO_ANALYST_ARTIFACT_ROOT = Path("data") / "artifacts" / "analyst" / "macro_analyst"
+_MACRO_MANAGER_ARTIFACT_ROOT = Path("data") / "artifacts" / "manager" / "macro_manager"
+_MACRO_ANALYST_ARTIFACT_DIRS: Dict[str, str] = {
+    "news": "news_analyst",
+    "market_sentiment": "market_sentiment_analyst",
+    "liquidity": "liquidity_analyst",
+    "commodity": "commodity_analyst",
+    "macro_economist": "macro_economist",
+}
 
 _MACRO_MANAGER_SUMMARY_DEFAULT: Dict[str, Any] = {
     "market_regime": "unknown",
@@ -28,6 +40,131 @@ _MACRO_MANAGER_SUMMARY_DEFAULT: Dict[str, Any] = {
     "confidence": 0.0,
     "macro_summary": "",
 }
+
+
+def _build_macro_analyst_result_path(name: str, trade_date: str) -> Optional[Path]:
+    """根据分析师名称与交易日，定位本地 artifact 的 result.json 路径。"""
+    artifact_dir = _MACRO_ANALYST_ARTIFACT_DIRS.get(name)
+    if not artifact_dir:
+        return None
+    return _MACRO_ANALYST_ARTIFACT_ROOT / artifact_dir / trade_date / "result.json"
+
+
+def _load_json_file(path: Path) -> Any:
+    """读取 JSON 文件并返回解析结果。"""
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
+    """原子写入 JSON，避免中途中断留下半成品。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, path)
+
+
+def _persist_macro_manager_summary(
+    state: Dict[str, Any],
+    summary: Dict[str, Any],
+) -> Dict[str, Any]:
+    """将 macro_manager_summary 持久化到本地 artifacts。"""
+    trade_date = str(state.get("trade_date") or datetime.now().strftime("%Y%m%d")).replace("-", "")[:8]
+    artifact_dir = _MACRO_MANAGER_ARTIFACT_ROOT / trade_date
+    result_path = artifact_dir / "result.json"
+    manifest_path = artifact_dir / "manifest.json"
+
+    _write_json_atomic(result_path, summary)
+    _write_json_atomic(
+        manifest_path,
+        {
+            "artifact_type": "macro_manager_summary",
+            "module": "agents.manager.macro_manager",
+            "trade_date": trade_date,
+            "created_at": datetime.now().astimezone().isoformat(),
+            "status": "success",
+            "result_path": result_path.as_posix(),
+        },
+    )
+    logger.info("macro_manager_summary 已写入本地 artifacts: %s", result_path)
+    return {
+        **state,
+        "macro_manager_summary": summary,
+        "macro_manager_artifact_path": result_path.as_posix(),
+        "macro_manager_manifest_path": manifest_path.as_posix(),
+    }
+
+
+def create_detect_available_analysts_node(
+    analyst_tasks: List[Tuple[str, Any, str]],
+):
+    """
+    检测本地已存在的 analyst artifact。
+
+    - 命中则直接加载到 state 的 output_key
+    - 未命中则记录到 missing_analysts
+    """
+
+    def detect_available_analysts_node(
+        state: Dict[str, Any],
+        config: Optional[RunnableConfig] = None,
+    ) -> Dict[str, Any]:
+        _ = config
+        trade_date = str(state.get("trade_date") or "").replace("-", "")[:8]
+        available_analysts: List[str] = []
+        missing_analysts: List[str] = []
+        loaded_artifact_paths: Dict[str, str] = {}
+        loaded_values: Dict[str, Any] = {}
+
+        if not trade_date:
+            logger.warning("detect_available_analysts: 缺少 trade_date，无法检测本地数据")
+            return {
+                **state,
+                "available_analysts": available_analysts,
+                "missing_analysts": [name for name, _, _ in analyst_tasks],
+                "loaded_artifact_paths": loaded_artifact_paths,
+            }
+
+        for name, _, output_key in analyst_tasks:
+            existing_value = state.get(output_key)
+            if existing_value:
+                available_analysts.append(name)
+                loaded_artifact_paths[name] = "<state>"
+                continue
+
+            result_path = _build_macro_analyst_result_path(name, trade_date)
+            if result_path is None or not result_path.exists():
+                missing_analysts.append(name)
+                continue
+
+            try:
+                payload = _load_json_file(result_path)
+                if not payload:
+                    logger.warning("detect_available_analysts: %s 本地结果为空，视为缺失", result_path)
+                    missing_analysts.append(name)
+                    continue
+                loaded_values[output_key] = payload
+                available_analysts.append(name)
+                loaded_artifact_paths[name] = result_path.as_posix()
+            except Exception as e:
+                logger.warning("detect_available_analysts: 读取 %s 失败: %s", result_path, e)
+                missing_analysts.append(name)
+
+        logger.info(
+            "macro_manager 本地检测完成: 命中 %d 个，缺失 %d 个",
+            len(available_analysts),
+            len(missing_analysts),
+        )
+        return {
+            **state,
+            **loaded_values,
+            "available_analysts": available_analysts,
+            "missing_analysts": missing_analysts,
+            "loaded_artifact_paths": loaded_artifact_paths,
+        }
+
+    return detect_available_analysts_node
 
 
 def _get_industry_and_concept_lists() -> Tuple[List[str], List[str]]:
@@ -82,13 +219,18 @@ def create_macro_summary_node(llm=None):
     ) -> Dict[str, Any]:
         if llm is None:
             logger.warning("macro_summary: 未提供 LLM，跳过汇总分析")
-            return {
-                **state,
-                "macro_manager_summary": {
-                    **_MACRO_MANAGER_SUMMARY_DEFAULT,
-                    "macro_summary": "未提供 LLM，无法生成宏观汇总结论。",
-                },
+            summary = {
+                **_MACRO_MANAGER_SUMMARY_DEFAULT,
+                "macro_summary": "未提供 LLM，无法生成宏观汇总结论。",
             }
+            try:
+                return _persist_macro_manager_summary(state, summary)
+            except Exception as e:
+                logger.warning("写入 macro_manager artifacts 失败: %s", e)
+                return {
+                    **state,
+                    "macro_manager_summary": summary,
+                }
 
         trade_date = state.get("trade_date") or datetime.now().strftime("%Y%m%d")
         industry_list, ths_concept_list = _get_industry_and_concept_lists()
@@ -162,8 +304,11 @@ JSON 结构（focus_industry_sectors / focus_concept_sectors 必须从下方对�
         data = extract_json_text(raw)
         for k, v in _MACRO_MANAGER_SUMMARY_DEFAULT.items():
             data.setdefault(k, v)
-
-        return {**state, "macro_manager_summary": data}
+        try:
+            return _persist_macro_manager_summary(state, data)
+        except Exception as e:
+            logger.warning("写入 macro_manager artifacts 失败: %s", e)
+            return {**state, "macro_manager_summary": data}
 
     return macro_summary_node
 
@@ -209,12 +354,40 @@ def create_run_analysts_node(
         trade_date = state.get("trade_date") or ""
         if not trade_date:
             logger.warning("run_analysts: 缺少 trade_date，跳过所有子图")
-            return {
+            error_outputs = {
                 output_key: {"error": "missing trade_date"}
                 for _, _, output_key in analyst_tasks
             }
+            return {
+                **state,
+                "available_analysts": [],
+                "missing_analysts": [name for name, _, _ in analyst_tasks],
+                **error_outputs,
+            }
 
-        logger.info("开始并行运行 %d 个分析师子图（新闻、市场情绪、流动性、大宗商品、宏观经济）", len(analyst_tasks))
+        missing_analysts = state.get("missing_analysts")
+        if isinstance(missing_analysts, list):
+            missing_set = {str(x) for x in missing_analysts}
+            tasks_to_run = [
+                (name, graph, output_key)
+                for name, graph, output_key in analyst_tasks
+                if name in missing_set
+            ]
+        else:
+            tasks_to_run = analyst_tasks
+
+        if not tasks_to_run:
+            logger.info("macro_manager 所有分析师结果均已命中本地 artifacts，跳过子图执行")
+            return {
+                **state,
+                "missing_analysts": [],
+            }
+
+        logger.info(
+            "开始并行运行 %d 个缺失的分析师子图（总计 %d 个）",
+            len(tasks_to_run),
+            len(analyst_tasks),
+        )
         invoke_input: Dict[str, Any] = {"trade_date": trade_date}
         out: Dict[str, Any] = {}
 
@@ -227,7 +400,7 @@ def create_run_analysts_node(
                     output_key,
                     invoke_input,
                 ): (name, output_key)
-                for name, graph, output_key in analyst_tasks
+                for name, graph, output_key in tasks_to_run
             }
             for future in as_completed(futures):
                 name, output_key = futures[future]
@@ -238,19 +411,34 @@ def create_run_analysts_node(
                     logger.exception("获取子图 %s 结果失败: %s", name, e)
                     out[output_key] = {"error": str(e)}
 
-        # 确保所有 output_key 都有键（未完成的已在 as_completed 里按 key 写入）
-        for _, _, output_key in analyst_tasks:
+        # 确保本次需要补跑的 output_key 都有返回
+        for _, _, output_key in tasks_to_run:
             if output_key not in out:
                 out[output_key] = {"error": "no result"}
 
-        logger.info("5 个分析师子图执行完毕，即将进入宏观经理汇总")
+        merged_state = {**state, **out}
+        remaining_missing: List[str] = []
+        available_analysts: List[str] = []
+        for name, _, output_key in analyst_tasks:
+            value = merged_state.get(output_key)
+            if not value or (isinstance(value, dict) and value.get("error")):
+                remaining_missing.append(name)
+            else:
+                available_analysts.append(name)
+
+        logger.info("缺失分析师补跑结束，即将进入宏观经理汇总")
         # 显式合并当前 state（含 trade_date）与子图结果，避免框架合并导致下游拿不到键
-        return {**state, **out}
+        return {
+            **merged_state,
+            "available_analysts": available_analysts,
+            "missing_analysts": remaining_missing,
+        }
 
     return run_analysts_node
 
 
 __all__ = [
+    "create_detect_available_analysts_node",
     "create_macro_summary_node",
     "create_run_analysts_node",
 ]
