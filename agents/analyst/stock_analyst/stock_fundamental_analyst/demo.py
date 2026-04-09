@@ -37,8 +37,8 @@ def main() -> None:
 
     from langchain_openai import ChatOpenAI
 
-    from ...callbacks import get_llm_callbacks
-    from ...config import get_llm_config, validate_config
+    from ....callbacks import get_llm_callbacks
+    from ....config import get_llm_config, validate_config
 
     parser = argparse.ArgumentParser(description="Stock Fundamental Analyst Demo")
     parser.add_argument("ts_code", help="股票代码：6 位数字（自动补 .SH/.SZ/.BJ）或完整如 000001.SZ")

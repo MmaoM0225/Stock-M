@@ -17,8 +17,8 @@ import time
 from langchain_openai import ChatOpenAI
 
 from .graph import create_news_graph
-from ...config import get_llm_config, validate_config
-from ...callbacks import get_llm_callbacks
+from ....config import get_llm_config, validate_config
+from ....callbacks import get_llm_callbacks
 from dataflow.news_sentiment import NewsSentimentFetcher
 
 

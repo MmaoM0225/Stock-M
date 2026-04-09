@@ -30,8 +30,18 @@
 
 2. 新闻分析结果
 
-- 当前不再生成独立 Markdown 文件
-- 当前结果主要停留在运行态 state 中，输出键为 `news_analysis`
+- 存储目录：`data/artifacts/analyst/macro_analyst/news_analyst/{trade_date}/`
+- 文件名模板：
+  - `result.json`
+  - `manifest.json`
+- 示例：
+  - `data/artifacts/analyst/macro_analyst/news_analyst/20260309/result.json`
+  - `data/artifacts/analyst/macro_analyst/news_analyst/20260309/manifest.json`
+- 主键维度：`trade_date`
+- 说明：
+  - 最终输出键为 `news_analysis`
+  - `result.json` 保存结构化分析结果
+  - `manifest.json` 保存产物元信息与结果路径
 
 #### `agents.analyst.macro_analyst.market_sentiment_analyst`
 

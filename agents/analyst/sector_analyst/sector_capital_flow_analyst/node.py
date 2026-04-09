@@ -13,7 +13,7 @@ from langchain_core.runnables import RunnableConfig
 
 logger = logging.getLogger(__name__)
 
-from ...utils import date_offset, to_serializable, extract_json_text
+from ....utils import date_offset, to_serializable, extract_json_text
 
 
 # 最大回溯天数：为了覆盖 20 日窗口，适当多留一些缓冲（自然日）

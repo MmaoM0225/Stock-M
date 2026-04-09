@@ -1,18 +1,22 @@
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.prompts import ChatPromptTemplate
 
 from langchain_core.runnables import RunnableConfig
 
-from ...utils import extract_json_text, is_trading_day
+from ....utils import extract_json_text, is_trading_day
 from langgraph.constants import Send
 from langgraph.graph import END
+import os
 import json
 import logging
 from typing import Dict, List, Any, Optional
 from datetime import datetime
+from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
 from enum import Enum
 
 logger = logging.getLogger(__name__)
+
+NEWS_ARTIFACT_ROOT = Path("data") / "artifacts" / "analyst" / "macro_analyst" / "news_analyst"
 
 
 class EventType(str, Enum):
@@ -523,4 +527,61 @@ def create_news_reduce_node(llm):
         }
     
     return news_reduce_node
+
+
+def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
+    """原子写入 JSON，避免中途中断留下半成品。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, path)
+
+
+def create_news_result_persist_node():
+    """将最终输出键 news_analysis 持久化到本地 artifacts。"""
+
+    def news_result_persist_node(
+        state: Dict[str, Any],
+        config: Optional[RunnableConfig] = None,
+    ) -> Dict[str, Any]:
+        _ = config
+        analysis_result = state.get("news_analysis")
+        if not analysis_result:
+            return state
+
+        trade_date = str(
+            analysis_result.get("date")
+            or state.get("trade_date")
+            or datetime.now().strftime("%Y%m%d")
+        ).replace("-", "")[:8]
+        artifact_dir = NEWS_ARTIFACT_ROOT / trade_date
+        result_path = artifact_dir / "result.json"
+        manifest_path = artifact_dir / "manifest.json"
+
+        try:
+            _write_json_atomic(result_path, analysis_result)
+            _write_json_atomic(
+                manifest_path,
+                {
+                    "artifact_type": "news_analysis",
+                    "module": "agents.analyst.macro_analyst.news_analyst",
+                    "trade_date": trade_date,
+                    "created_at": datetime.now().astimezone().isoformat(),
+                    "status": "success",
+                    "source": state.get("news_source"),
+                    "result_path": result_path.as_posix(),
+                },
+            )
+            logger.info("news_analysis 已写入本地 artifacts: %s", result_path)
+            return {
+                **state,
+                "news_analysis_artifact_path": result_path.as_posix(),
+                "news_analysis_manifest_path": manifest_path.as_posix(),
+            }
+        except Exception as e:
+            logger.warning("写入 news_analysis artifacts 失败: %s", e)
+            return state
+
+    return news_result_persist_node
 

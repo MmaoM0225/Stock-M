@@ -36,8 +36,8 @@ def main() -> None:
 
     from langchain_openai import ChatOpenAI
 
-    from ...callbacks import get_llm_callbacks
-    from ...config import get_llm_config, validate_config
+    from ....callbacks import get_llm_callbacks
+    from ....config import get_llm_config, validate_config
 
     parser = argparse.ArgumentParser(description="Sector Trend Analyst Demo")
     parser.add_argument("date", nargs="?", help="交易日期 YYYYMMDD")

@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 from langchain_core.runnables import RunnableConfig
 
-from ...utils import date_offset, extract_json_text, to_serializable
+from ....utils import date_offset, extract_json_text, to_serializable
 
 logger = logging.getLogger(__name__)
 
