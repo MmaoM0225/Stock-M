@@ -15,11 +15,11 @@
 
 | 分析师 | 子图模块 | 输出在 state 中的键名 |
 |--------|----------|------------------------|
-| 新闻分析师 | `agents.analyst.news_analyst` | `news_analysis` |
-| 市场情绪分析师 | `agents.analyst.market_sentiment_analyst` | `market_sentiment_analyst_summary` |
-| 流动性分析师 | `agents.analyst.liquidity_analyst` | `liquidity_analyst_summary` |
-| 大宗商品分析师 | `agents.analyst.commodity_analyst` | `commodity_analyst_summary` |
-| 宏观经济分析师 | `agents.analyst.macro_economist` | `macro_economist_analysis` |
+| 新闻分析师 | `agents.analyst.macro_analyst.news_analyst` | `news_analysis` |
+| 市场情绪分析师 | `agents.analyst.macro_analyst.market_sentiment_analyst` | `market_sentiment_analyst_summary` |
+| 流动性分析师 | `agents.analyst.macro_analyst.liquidity_analyst` | `liquidity_analyst_summary` |
+| 大宗商品分析师 | `agents.analyst.macro_analyst.commodity_analyst` | `commodity_analyst_summary` |
+| 宏观经济分析师 | `agents.analyst.macro_analyst.macro_economist` | `macro_economist_analysis` |
 
 每个子图均支持 `invoke({"trade_date": "YYYYMMDD"})`，返回的 state 中包含上表对应键名的结果。
 

@@ -21,7 +21,7 @@ class LLMConfig:
     
     def __init__(self, 
                  provider: str = 'siliconflow',
-                 model: str = 'Pro/deepseek-ai/DeepSeek-V3.2',
+                 model: str = 'Pro/MiniMaxAI/MiniMax-M2.5',
                  base_url: str = None,
                  temperature: float = 0.0,
                  max_retries: int = 3,
@@ -140,17 +140,8 @@ class LoggingConfig:
 
 MACRO_DAILY_LOOKBACK = 60   # 日线回溯天数
 MACRO_MONTH_LOOKBACK = 12   # 月度回溯月数（LPR/CPI/社融）
-# Markdown 报告生成：由单独节点执行，configurable.macro_config 可覆盖
-# 宏观管理器（macro_manager）：是否生成 data/analysis 下的汇总报告、报告正文是否由 LLM 生成
-MACRO_GENERATE_MARKDOWN = True   # 是否生成宏观汇总 Markdown 报告（False 则 macro_summary 后不写文件）
-MACRO_USE_LLM_FOR_MARKDOWN = False  # True=最终报告由 LLM 写（full_report_markdown）；False=仅程序化拼接各分析师结果
-NEWS_GENERATE_MARKDOWN = False  # 是否生成 news Markdown 报告
-NEWS_USE_LLM_FOR_MARKDOWN = False  # 是否用 LLM 润色 news MD
 # 宏观管理器配置：同时运行的分析师子图数量上限（避免 API 限流与资源打满）
 MACRO_MANAGER_MAX_CONCURRENT_SUBGRAPHS = 2
-# 行业管理器（sector_manager）：是否生成 data/analysis 下的汇总报告、报告正文是否由 LLM 生成
-SECTOR_GENERATE_MARKDOWN = True  # 是否生成行业汇总 Markdown 报告（False 则 sector_summary 后不写文件）
-SECTOR_USE_LLM_FOR_MARKDOWN = False  # True=最终报告由 LLM 写；False=仅程序化拼接两个分析师结果
 # 行业管理器配置：同时运行的分析师子图数量上限
 SECTOR_MANAGER_MAX_CONCURRENT_SUBGRAPHS = 2
 # 宏观经济分析师配置

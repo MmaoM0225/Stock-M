@@ -1,8 +1,8 @@
 """
 Sector Trend Analyst（行业趋势分析师）Demo。
 
-    python -m agents.analyst.sector_trend_analyst.demo
-    python -m agents.analyst.sector_trend_analyst.demo 20260316
+    python -m agents.analyst.sector_analyst.sector_trend_analyst.demo
+    python -m agents.analyst.sector_analyst.sector_trend_analyst.demo 20260316
 """
 import re
 import time

@@ -85,10 +85,6 @@ def main():
     elapsed = time.perf_counter() - start
     print(f"完成，耗时 {elapsed:.2f} 秒")
 
-    report_path = result.get("macro_report_path")
-    if report_path:
-        print(f"\n宏观汇总报告已写入: {report_path}")
-
     keys = [
         "news_analysis",
         "market_sentiment_analyst_summary",

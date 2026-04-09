@@ -1,30 +1,15 @@
 """
 Macro Manager（宏观管理器）- 图结构
 
-流程：START → run_analysts（并行运行 5 个分析师子图）→ END
+流程：START → run_analysts（并行运行 5 个分析师子图）→ macro_summary → END
 """
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
-from langchain_core.runnables import RunnableConfig
-from langgraph.graph import END, StateGraph, START
+from langgraph.graph import END, START, StateGraph
 
-from agents.config import (
-    MACRO_GENERATE_MARKDOWN,
-    MACRO_MANAGER_MAX_CONCURRENT_SUBGRAPHS,
-)
+from agents.config import MACRO_MANAGER_MAX_CONCURRENT_SUBGRAPHS
 
-from .node import (
-    create_run_analysts_node,
-    create_macro_summary_node,
-    create_write_macro_report_node,
-    get_macro_config,
-)
-
-
-def _route_after_macro_summary(state: dict, config: RunnableConfig | None = None) -> str:
-    """macro_summary 之后：若 MACRO_GENERATE_MARKDOWN 则写报告，否则直接结束。"""
-    cfg = get_macro_config(config)
-    return "write_macro_report" if cfg.get("generate_markdown", MACRO_GENERATE_MARKDOWN) else END
+from .node import create_macro_summary_node, create_run_analysts_node
 
 
 def create_macro_manager_graph(
@@ -35,7 +20,7 @@ def create_macro_manager_graph(
     """
     构建 Macro Manager 图：编排 5 个微观分析师子图，控制并发并汇总结果。
 
-    流程：run_analysts 内并行执行 5 个子图 → macro_summary（LLM 综合结论与报告）→ write_macro_report 将结果写入 data/analysis/{trade_date}_macro_report.md。
+    流程：run_analysts 内并行执行 5 个子图 → macro_summary（LLM 综合结论）→ END。
 
     Args:
         llm: LLM 实例，供各分析师子图共用
@@ -52,13 +37,13 @@ def create_macro_manager_graph(
     )
 
     # 构建 5 个分析师子图
-    from agents.analyst.news_analyst.graph import create_news_graph
-    from agents.analyst.market_sentiment_analyst.graph import (
+    from agents.analyst.macro_analyst.news_analyst.graph import create_news_graph
+    from agents.analyst.macro_analyst.market_sentiment_analyst.graph import (
         create_market_sentiment_analyst_graph,
     )
-    from agents.analyst.liquidity_analyst.graph import create_liquidity_analyst_graph
-    from agents.analyst.commodity_analyst.graph import create_commodity_analyst_graph
-    from agents.analyst.macro_economist.graph import create_macro_economist_graph
+    from agents.analyst.macro_analyst.liquidity_analyst.graph import create_liquidity_analyst_graph
+    from agents.analyst.macro_analyst.commodity_analyst.graph import create_commodity_analyst_graph
+    from agents.analyst.macro_analyst.macro_economist.graph import create_macro_economist_graph
 
     if news_fetcher is None:
         try:
@@ -86,15 +71,11 @@ def create_macro_manager_graph(
         max_workers=max_workers,
     )
     macro_summary_node = create_macro_summary_node(llm=llm)
-    write_macro_report_node = create_write_macro_report_node()
-
     builder = StateGraph(dict)
     builder.add_node("run_analysts", run_analysts_node)
     builder.add_node("macro_summary", macro_summary_node)
-    builder.add_node("write_macro_report", write_macro_report_node)
     builder.add_edge(START, "run_analysts")
     builder.add_edge("run_analysts", "macro_summary")
-    builder.add_conditional_edges("macro_summary", _route_after_macro_summary)
-    builder.add_edge("write_macro_report", END)
+    builder.add_edge("macro_summary", END)
 
     return builder.compile()

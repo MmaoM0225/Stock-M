@@ -1,8 +1,8 @@
 """
 Stock Technical Analyst Demo。
 
-    python -m agents.analyst.stock_technical_analyst.demo 000001
-    python -m agents.analyst.stock_technical_analyst.demo 600519 20260401
+    python -m agents.analyst.stock_analyst.stock_technical_analyst.demo 000001
+    python -m agents.analyst.stock_analyst.stock_technical_analyst.demo 600519 20260401
 """
 
 import re

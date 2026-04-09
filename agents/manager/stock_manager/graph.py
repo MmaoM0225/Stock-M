@@ -16,8 +16,8 @@ def create_stock_manager_graph(
 ) -> Any:
     max_workers = max_concurrent_subgraphs if max_concurrent_subgraphs is not None else 2
 
-    from agents.analyst.stock_fundamental_analyst.graph import create_stock_fundamental_analyst_graph
-    from agents.analyst.stock_technical_analyst.graph import create_stock_technical_analyst_graph
+    from agents.analyst.stock_analyst.stock_fundamental_analyst.graph import create_stock_fundamental_analyst_graph
+    from agents.analyst.stock_analyst.stock_technical_analyst.graph import create_stock_technical_analyst_graph
 
     fundamental_graph = create_stock_fundamental_analyst_graph(llm=llm)
     technical_graph = create_stock_technical_analyst_graph(llm=llm)

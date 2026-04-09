@@ -76,10 +76,6 @@ def main() -> None:
     elapsed = time.perf_counter() - start
     print(f"完成，耗时 {elapsed:.2f} 秒")
 
-    report_path = result.get("sector_report_path")
-    if report_path:
-        print(f"\n行业综合报告已写入: {report_path}")
-
     print("\n=== sector_manager_summary ===")
     pprint(result.get("sector_manager_summary"))
 

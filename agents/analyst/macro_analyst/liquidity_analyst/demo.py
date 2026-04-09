@@ -1,11 +1,10 @@
 """
-Macro Economist（宏观经济分析师）Demo。
+Liquidity Analyst（流动性分析师）Demo。
 
-    python -m agents.analyst.macro_economist.demo
-    python -m agents.analyst.macro_economist.demo 20260305
+    python -m agents.analyst.macro_analyst.liquidity_analyst.demo
+    python -m agents.analyst.macro_analyst.liquidity_analyst.demo 20260305
 """
 
-import logging
 import re
 import time
 from datetime import datetime, timedelta
@@ -13,7 +12,7 @@ from typing import Any, Dict, Optional
 
 from langchain_openai import ChatOpenAI
 
-from .graph import create_macro_economist_graph
+from .graph import create_liquidity_analyst_graph
 from ...config import get_llm_config, validate_config
 from ...callbacks import get_llm_callbacks
 
@@ -40,12 +39,7 @@ def main():
     import argparse
     from pprint import pprint
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
-
-    parser = argparse.ArgumentParser(description="Macro Economist Demo")
+    parser = argparse.ArgumentParser(description="Liquidity Analyst Demo")
     parser.add_argument("date", nargs="?", help="交易日期 YYYYMMDD")
     args = parser.parse_args()
 
@@ -66,17 +60,17 @@ def main():
         callbacks=get_llm_callbacks(),
     )
 
-    graph = create_macro_economist_graph(llm=llm)
+    graph = create_liquidity_analyst_graph(llm=llm)
     trade_date = _resolve_trade_date(target_date)
     invoke_input: Dict[str, Any] = {"trade_date": trade_date}
 
-    print(f"交易日 {trade_date}，运行 Macro Economist...")
+    print(f"交易日 {trade_date}，运行 Liquidity Analyst...")
     start = time.perf_counter()
     result = graph.invoke(invoke_input)
     print(f"完成，耗时 {time.perf_counter() - start:.2f} 秒")
 
-    print("\n=== macro_economist_analysis ===")
-    pprint(result.get("macro_economist_analysis"))
+    print("\n=== liquidity_analyst_summary ===")
+    pprint(result.get("liquidity_analyst_summary"))
 
 
 if __name__ == "__main__":

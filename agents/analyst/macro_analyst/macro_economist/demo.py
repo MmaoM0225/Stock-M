@@ -1,10 +1,11 @@
 """
-Market Sentiment Analyst（市场情绪分析师）Demo。
+Macro Economist（宏观经济分析师）Demo。
 
-    python -m agents.analyst.market_sentiment_analyst.demo
-    python -m agents.analyst.market_sentiment_analyst.demo 20260305
+    python -m agents.analyst.macro_analyst.macro_economist.demo
+    python -m agents.analyst.macro_analyst.macro_economist.demo 20260305
 """
 
+import logging
 import re
 import time
 from datetime import datetime, timedelta
@@ -12,7 +13,7 @@ from typing import Any, Dict, Optional
 
 from langchain_openai import ChatOpenAI
 
-from .graph import create_market_sentiment_analyst_graph
+from .graph import create_macro_economist_graph
 from ...config import get_llm_config, validate_config
 from ...callbacks import get_llm_callbacks
 
@@ -39,7 +40,12 @@ def main():
     import argparse
     from pprint import pprint
 
-    parser = argparse.ArgumentParser(description="Market Sentiment Analyst Demo")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+
+    parser = argparse.ArgumentParser(description="Macro Economist Demo")
     parser.add_argument("date", nargs="?", help="交易日期 YYYYMMDD")
     args = parser.parse_args()
 
@@ -60,17 +66,17 @@ def main():
         callbacks=get_llm_callbacks(),
     )
 
-    graph = create_market_sentiment_analyst_graph(llm=llm)
+    graph = create_macro_economist_graph(llm=llm)
     trade_date = _resolve_trade_date(target_date)
     invoke_input: Dict[str, Any] = {"trade_date": trade_date}
 
-    print(f"交易日 {trade_date}，运行 Market Sentiment Analyst...")
+    print(f"交易日 {trade_date}，运行 Macro Economist...")
     start = time.perf_counter()
     result = graph.invoke(invoke_input)
     print(f"完成，耗时 {time.perf_counter() - start:.2f} 秒")
 
-    print("\n=== market_sentiment_analyst_summary ===")
-    pprint(result.get("market_sentiment_analyst_summary"))
+    print("\n=== macro_economist_analysis ===")
+    pprint(result.get("macro_economist_analysis"))
 
 
 if __name__ == "__main__":

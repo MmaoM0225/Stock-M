@@ -1,8 +1,8 @@
 """
 Stock Screener（股票筛选分析师）Demo
 
-    python -m agents.analyst.stock_screener.demo
-    python -m agents.analyst.stock_screener.demo 20260328
+    python -m agents.analyst.stock_analyst.stock_screener.demo
+    python -m agents.analyst.stock_analyst.stock_screener.demo 20260328
 
 筛选条件可在 main() 中修改，支持：
 - sectors: 行业列表

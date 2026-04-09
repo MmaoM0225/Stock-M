@@ -4,7 +4,7 @@ Stock Screener Analyst（股票筛选分析师）
 从指定板块或全市场中筛选符合条件的股票池（行情与市值来自 daily_basic，名称/行业来自 stock_basic）。
 
 Usage:
-    from agents.analyst.stock_screener import create_stock_screener_graph
+    from agents.analyst.stock_analyst.stock_screener import create_stock_screener_graph
 
     graph = create_stock_screener_graph()
     result = graph.invoke({

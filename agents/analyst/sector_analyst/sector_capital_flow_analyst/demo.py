@@ -1,8 +1,8 @@
 """
 Sector Capital Flow Analyst（板块资金流分析师）Demo。
 
-    python -m agents.analyst.sector_capital_flow_analyst.demo
-    python -m agents.analyst.sector_capital_flow_analyst.demo 20260316
+    python -m agents.analyst.sector_analyst.sector_capital_flow_analyst.demo
+    python -m agents.analyst.sector_analyst.sector_capital_flow_analyst.demo 20260316
 """
 
 import re

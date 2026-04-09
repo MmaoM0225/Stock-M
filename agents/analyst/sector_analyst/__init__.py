@@ -1,0 +1,1 @@
+"""Sector-level analyst subpackage."""
