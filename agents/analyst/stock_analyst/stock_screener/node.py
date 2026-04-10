@@ -4,6 +4,8 @@ Stock Screener（股票筛选分析师）- 节点实现
 使用 daily_basic（每日指标）拉取 PE/PB、总市值 total_mv 等；合并 stock_basic 补全名称、行业、上市日。
 """
 import logging
+import json
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 import pandas as pd
@@ -11,6 +13,59 @@ import pandas as pd
 from .criteria import ScreenerCriteria
 
 logger = logging.getLogger(__name__)
+_SECTOR_MANAGER_ARTIFACT_ROOT = Path("data") / "artifacts" / "manager" / "sector_manager"
+
+
+def _ordered_unique_strings(items: List[Any], max_items: Optional[int] = None) -> List[str]:
+    """去重并保序，过滤空值。"""
+    out: List[str] = []
+    seen = set()
+    for item in items:
+        if item is None:
+            continue
+        text = str(item).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+        if max_items is not None and len(out) >= max_items:
+            break
+    return out
+
+
+def _load_sector_manager_sectors_from_artifact(trade_date: Any) -> List[str]:
+    """
+    从 sector_manager 的 result.json 动态提取板块：
+    - 优先 favored_sectors
+    - 其次 watchlist_sectors
+    """
+    trade_date_text = str(trade_date or "").replace("-", "")[:8]
+    if not trade_date_text:
+        return []
+
+    result_path = _SECTOR_MANAGER_ARTIFACT_ROOT / trade_date_text / "result.json"
+    if not result_path.exists():
+        logger.info("未命中 sector_manager artifact: %s", result_path)
+        return []
+
+    try:
+        with open(result_path, "r", encoding="utf-8") as f:
+            payload = json.load(f) or {}
+    except Exception as e:
+        logger.warning("读取 sector_manager artifact 失败: %s, error=%s", result_path, e)
+        return []
+
+    favored = payload.get("favored_sectors") or []
+    watchlist = payload.get("watchlist_sectors") or []
+    sectors = _ordered_unique_strings([*favored, *watchlist], max_items=16)
+    logger.info(
+        "加载 sector_manager 板块完成: trade_date=%s, favored=%d, watchlist=%d, merged=%d",
+        trade_date_text,
+        len(favored),
+        len(watchlist),
+        len(sectors),
+    )
+    return sectors
 
 
 def _resolve_ths_sector_members(sector_names: List[str]) -> Set[str]:
@@ -87,8 +142,12 @@ def create_parse_criteria_node():
 
     def parse_criteria_node(state: Dict[str, Any]) -> Dict[str, Any]:
         """从 state 中解析筛选条件"""
+        sectors = state.get("sectors")
+        if not sectors:
+            sectors = _load_sector_manager_sectors_from_artifact(state.get("trade_date"))
+
         criteria_dict = {
-            "sectors": state.get("sectors"),
+            "sectors": sectors,
             "exclude_st": state.get("exclude_st", True),
             "exclude_delisting": state.get("exclude_delisting", True),
             "min_listing_days": state.get("min_listing_days", 180),
@@ -122,6 +181,7 @@ def create_parse_criteria_node():
             **state,
             "_criteria": criteria,
             "_criteria_errors": None,
+            "sectors": sectors,
         }
 
     return parse_criteria_node

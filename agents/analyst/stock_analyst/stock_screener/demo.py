@@ -57,13 +57,13 @@ def main():
     graph = create_stock_screener_graph()
 
     # ========== 筛选条件示例 ==========
-    # # 示例1: 大盘股 (100亿以上)
+    # # 示例1: 使用 sector_manager 动态板块 + 大盘股 (100亿以上)
     criteria = {
-        "trade_date": "20260403",
-        "min_market_cap": 100e8,  # 100亿以上
+        "trade_date": trade_date,
+        "min_market_cap": 150e8,  # 150亿以上
         "exclude_st": True,
         "max_stocks": 20,
-        "sort_by": "dv_ratio",
+        "sort_by": "total_mv",
         "sort_order": "desc",
     }
 
