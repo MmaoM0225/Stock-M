@@ -86,12 +86,20 @@ def main():
             print("风险/弱势板块:", insight["risk_sectors"])
 
     top = result.get("sector_capital_flow_top") or {}
+    meta = result.get("sector_moneyflow_meta") or {}
+    if meta:
+        print(
+            f"\n数据获取状态: {meta.get('fetch_status', 'unknown')}"
+            f" | 条数: {meta.get('record_count', 0)}"
+        )
+        if meta.get("fetch_error"):
+            print("数据获取错误:", meta.get("fetch_error"))
+
     if not top:
         print("\n无资金流排行数据。")
         return
 
     ths_top = top.get("ths_concept") or {}
-    sw_top = top.get("sw_industry") or {}
 
     # 同花顺概念/板块 - 每个区间展示前 2 个完整 JSON
     if ths_top:
@@ -108,23 +116,6 @@ def main():
             print(f"\n=== THS {window_key} 净流出最多的 2 个板块 ===")
             for item in data.get("top_outflow", [])[:2]:
                 pprint(item)
-
-    # 申万行业 - 每个区间展示前 2 个完整 JSON
-    if sw_top:
-        print("\n================ 申万行业 资金强弱排行 ================")
-        from pprint import pprint
-        for window_key in ("1d", "5d", "10d", "20d"):
-            data = sw_top.get(window_key)
-            if not data:
-                continue
-            print(f"\n=== SW {window_key} 资金流入最强的 2 个行业 ===")
-            for item in data.get("top_inflow", [])[:2]:
-                pprint(item)
-
-            print(f"\n=== SW {window_key} 资金流出最弱的 2 个行业 ===")
-            for item in data.get("top_outflow", [])[:2]:
-                pprint(item)
-
 
 if __name__ == "__main__":
     main()

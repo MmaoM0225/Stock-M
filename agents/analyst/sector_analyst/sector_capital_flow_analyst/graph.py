@@ -12,6 +12,7 @@ from .node import (
     create_sector_capital_flow_fetch_node,
     create_sector_capital_flow_analysis_node,
     create_sector_capital_flow_insight_node,
+    create_sector_capital_flow_result_persist_node,
 )
 
 
@@ -56,11 +57,13 @@ def create_sector_capital_flow_analyst_graph(llm=None) -> Any:
     builder.add_node("sector_capital_flow_fetch", create_sector_capital_flow_fetch_node())
     builder.add_node("sector_capital_flow_analysis", create_sector_capital_flow_analysis_node())
     builder.add_node("sector_capital_flow_insight", create_sector_capital_flow_insight_node(llm))
+    builder.add_node("sector_capital_flow_result_persist", create_sector_capital_flow_result_persist_node())
 
     builder.add_edge(START, "sector_capital_flow_fetch")
     builder.add_edge("sector_capital_flow_fetch", "sector_capital_flow_analysis")
     builder.add_edge("sector_capital_flow_analysis", "sector_capital_flow_insight")
-    builder.add_edge("sector_capital_flow_insight", END)
+    builder.add_edge("sector_capital_flow_insight", "sector_capital_flow_result_persist")
+    builder.add_edge("sector_capital_flow_result_persist", END)
     return builder.compile()
 
 
