@@ -62,7 +62,7 @@ def main():
         "trade_date": trade_date,
         "min_market_cap": 150e8,  # 150亿以上
         "exclude_st": True,
-        "max_stocks": 20,
+        "max_stocks": 30,
         "sort_by": "total_mv",
         "sort_order": "desc",
     }

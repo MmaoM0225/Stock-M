@@ -12,6 +12,7 @@ from .node import (
     create_fetch_stock_pool_node,
     create_format_output_node,
     create_parse_criteria_node,
+    create_screener_result_persist_node,
 )
 
 
@@ -40,6 +41,7 @@ def create_stock_screener_graph() -> Any:
     2. fetch_stock_pool: 获取初始股票池
     3. apply_filters: 应用筛选条件
     4. format_output: 格式化输出结果
+    5. persist_result: 持久化结果到 artifacts
 
     Returns:
         已编译的 Stock Screener 图
@@ -51,13 +53,15 @@ def create_stock_screener_graph() -> Any:
     builder.add_node("fetch_stock_pool", create_fetch_stock_pool_node())
     builder.add_node("apply_filters", create_apply_filters_node())
     builder.add_node("format_output", create_format_output_node())
+    builder.add_node("persist_result", create_screener_result_persist_node())
 
     # 添加边
     builder.add_edge(START, "parse_criteria")
     builder.add_conditional_edges("parse_criteria", _route_after_parse)
     builder.add_conditional_edges("fetch_stock_pool", _route_after_fetch)
     builder.add_edge("apply_filters", "format_output")
-    builder.add_edge("format_output", END)
+    builder.add_edge("format_output", "persist_result")
+    builder.add_edge("persist_result", END)
 
     return builder.compile()
 

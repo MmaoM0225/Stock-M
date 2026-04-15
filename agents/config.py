@@ -144,6 +144,8 @@ MACRO_MONTH_LOOKBACK = 12   # 月度回溯月数（LPR/CPI/社融）
 MACRO_MANAGER_MAX_CONCURRENT_SUBGRAPHS = 2
 # 行业管理器配置：同时运行的分析师子图数量上限
 SECTOR_MANAGER_MAX_CONCURRENT_SUBGRAPHS = 2
+# 个股池管理器：同时分析的股票只数上限（每只股票内部仍会并行跑基本面+技术面）
+STOCK_POOL_MANAGER_MAX_CONCURRENT_STOCKS = 3
 # 宏观经济分析师配置
 MACRO_USE_US_STOCK_TREND = False  # 是否纳入美股趋势分析
 # 国内市场分析默认指数：指数名称、指数代码、指数描述

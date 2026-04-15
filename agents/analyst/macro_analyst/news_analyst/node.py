@@ -171,20 +171,20 @@ def _get_news_sections_by_date(
 
 def _get_industry_and_concept_lists() -> tuple:
     """
-    获取行业名称列表与同花顺概念名称列表，供 LLM 在事件 industry 与 sector_impacts 中选用。
+    获取同花顺行业(I)列表与同花顺概念(N)列表，供 LLM 在事件 industry 与 sector_impacts 中选用。
     优先从数据库读取，否则从 dataflow 拉取。
     """
     industry_list: List[str] = []
     concept_list: List[str] = []
     try:
-        from database import Industry, ThsIndex
+        from database import ThsIndex
         from database.config import get_db_session
 
         with get_db_session() as session:
             industry_list = [
-                r[0] for r in session.query(Industry.industry_name).filter(
-                    Industry.industry_name.isnot(None)
-                ).distinct().all() if r[0]
+                r[0] for r in session.query(ThsIndex.name).filter(
+                    ThsIndex.index_type == "I"
+                ).all() if r[0]
             ]
             concept_list = [
                 r[0] for r in session.query(ThsIndex.name).filter(
@@ -192,20 +192,22 @@ def _get_industry_and_concept_lists() -> tuple:
                 ).all() if r[0]
             ]
     except Exception as e:
-        logger.debug("从数据库读取行业/概念列表失败，改用 dataflow: %s", e)
+        logger.debug("从数据库读取同花顺行业(I)/概念(N)列表失败，改用 dataflow: %s", e)
 
     if not industry_list or not concept_list:
         try:
-            from dataflow.industry_data import fetch_ths_index, get_all_industry_names
+            from dataflow.industry_data import fetch_ths_index
 
             if not industry_list:
-                industry_list = get_all_industry_names()
+                df = fetch_ths_index(index_type="I")
+                if not df.empty and "name" in df.columns:
+                    industry_list = df["name"].dropna().unique().tolist()
             if not concept_list:
                 df = fetch_ths_index(index_type="N")
                 if not df.empty and "name" in df.columns:
                     concept_list = df["name"].dropna().unique().tolist()
         except Exception as e:
-            logger.warning("从 dataflow 获取行业/概念列表失败: %s", e)
+            logger.warning("从 dataflow 获取同花顺行业(I)/概念(N)列表失败: %s", e)
 
     industry_list = sorted(set(str(x).strip() for x in industry_list if x))
     concept_list = sorted(set(str(x).strip() for x in concept_list if x))

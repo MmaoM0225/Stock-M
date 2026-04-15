@@ -5,6 +5,8 @@ Stock Screener（股票筛选分析师）- 节点实现
 """
 import logging
 import json
+import os
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -14,6 +16,7 @@ from .criteria import ScreenerCriteria
 
 logger = logging.getLogger(__name__)
 _SECTOR_MANAGER_ARTIFACT_ROOT = Path("data") / "artifacts" / "manager" / "sector_manager"
+_STOCK_SCREENER_ARTIFACT_ROOT = Path("data") / "artifacts" / "analyst" / "stock_analyst" / "stock_screener"
 
 
 def _ordered_unique_strings(items: List[Any], max_items: Optional[int] = None) -> List[str]:
@@ -464,10 +467,59 @@ def create_format_output_node():
     return format_output_node
 
 
+def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
+    """原子写入 JSON，避免中断产生半成品文件。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, path)
+
+
+def create_screener_result_persist_node():
+    """将筛选结果 screener_result 持久化到本地 artifacts。"""
+
+    def screener_result_persist_node(state: Dict[str, Any]) -> Dict[str, Any]:
+        screener_result = state.get("screener_result")
+        if not screener_result:
+            return state
+
+        trade_date = str(state.get("trade_date") or datetime.now().strftime("%Y%m%d")).replace("-", "")[:8]
+        artifact_dir = _STOCK_SCREENER_ARTIFACT_ROOT / trade_date
+        result_path = artifact_dir / "result.json"
+        manifest_path = artifact_dir / "manifest.json"
+
+        try:
+            _write_json_atomic(result_path, screener_result)
+            _write_json_atomic(
+                manifest_path,
+                {
+                    "artifact_type": "stock_screener_result",
+                    "module": "agents.analyst.stock_analyst.stock_screener",
+                    "trade_date": trade_date,
+                    "created_at": datetime.now().astimezone().isoformat(),
+                    "status": "success",
+                    "result_path": result_path.as_posix(),
+                },
+            )
+            logger.info("stock_screener 结果已写入本地 artifacts: %s", result_path)
+            return {
+                **state,
+                "stock_screener_artifact_path": result_path.as_posix(),
+                "stock_screener_manifest_path": manifest_path.as_posix(),
+            }
+        except Exception as e:
+            logger.warning("写入 stock_screener artifacts 失败: %s", e)
+            return state
+
+    return screener_result_persist_node
+
+
 __all__ = [
     "create_parse_criteria_node",
     "create_fetch_stock_pool_node",
     "create_apply_filters_node",
     "create_format_output_node",
+    "create_screener_result_persist_node",
     "ScreenerCriteria",
 ]
