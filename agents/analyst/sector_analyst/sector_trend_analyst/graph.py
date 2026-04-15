@@ -12,6 +12,7 @@ from .node import (
     create_sector_trend_analysis_node,
     create_sector_trend_fetch_node,
     create_sector_trend_insight_node,
+    create_sector_trend_result_persist_node,
 )
 
 
@@ -42,11 +43,13 @@ def create_sector_trend_analyst_graph(llm=None) -> Any:
     builder.add_node("sector_trend_fetch", create_sector_trend_fetch_node())
     builder.add_node("sector_trend_analysis", create_sector_trend_analysis_node())
     builder.add_node("sector_trend_insight", create_sector_trend_insight_node(llm))
+    builder.add_node("sector_trend_result_persist", create_sector_trend_result_persist_node())
 
     builder.add_edge(START, "sector_trend_fetch")
     builder.add_edge("sector_trend_fetch", "sector_trend_analysis")
     builder.add_edge("sector_trend_analysis", "sector_trend_insight")
-    builder.add_edge("sector_trend_insight", END)
+    builder.add_edge("sector_trend_insight", "sector_trend_result_persist")
+    builder.add_edge("sector_trend_result_persist", END)
     return builder.compile()
 
 

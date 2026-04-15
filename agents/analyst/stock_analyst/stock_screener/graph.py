@@ -12,6 +12,8 @@ from .node import (
     create_fetch_stock_pool_node,
     create_format_output_node,
     create_parse_criteria_node,
+    create_select_sector_templates_node,
+    create_screener_result_persist_node,
 )
 
 
@@ -20,7 +22,7 @@ def _route_after_parse(state: Dict[str, Any]) -> str:
     errors = state.get("_criteria_errors")
     if errors:
         return "format_output"
-    return "fetch_stock_pool"
+    return "select_sector_templates"
 
 
 def _route_after_fetch(state: Dict[str, Any]) -> str:
@@ -31,15 +33,17 @@ def _route_after_fetch(state: Dict[str, Any]) -> str:
     return "apply_filters"
 
 
-def create_stock_screener_graph() -> Any:
+def create_stock_screener_graph(llm: Any = None) -> Any:
     """
     构建 Stock Screener 图
 
     流程:
     1. parse_criteria: 解析筛选条件
-    2. fetch_stock_pool: 获取初始股票池
-    3. apply_filters: 应用筛选条件
-    4. format_output: 格式化输出结果
+    2. select_sector_templates: 决策各板块筛选模板（可选 LLM）
+    3. fetch_stock_pool: 获取初始股票池
+    4. apply_filters: 应用筛选条件
+    5. format_output: 格式化输出结果
+    6. persist_result: 持久化结果到 artifacts
 
     Returns:
         已编译的 Stock Screener 图
@@ -48,16 +52,20 @@ def create_stock_screener_graph() -> Any:
 
     # 添加节点
     builder.add_node("parse_criteria", create_parse_criteria_node())
+    builder.add_node("select_sector_templates", create_select_sector_templates_node(llm))
     builder.add_node("fetch_stock_pool", create_fetch_stock_pool_node())
     builder.add_node("apply_filters", create_apply_filters_node())
     builder.add_node("format_output", create_format_output_node())
+    builder.add_node("persist_result", create_screener_result_persist_node())
 
     # 添加边
     builder.add_edge(START, "parse_criteria")
     builder.add_conditional_edges("parse_criteria", _route_after_parse)
+    builder.add_edge("select_sector_templates", "fetch_stock_pool")
     builder.add_conditional_edges("fetch_stock_pool", _route_after_fetch)
     builder.add_edge("apply_filters", "format_output")
-    builder.add_edge("format_output", END)
+    builder.add_edge("format_output", "persist_result")
+    builder.add_edge("persist_result", END)
 
     return builder.compile()
 

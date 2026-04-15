@@ -30,28 +30,78 @@
 
 2. 新闻分析结果
 
-- 当前不再生成独立 Markdown 文件
-- 当前结果主要停留在运行态 state 中，输出键为 `news_analysis`
+- 存储目录：`data/artifacts/analyst/macro_analyst/news_analyst/{trade_date}/`
+- 文件名模板：
+  - `result.json`
+  - `manifest.json`
+- 示例：
+  - `data/artifacts/analyst/macro_analyst/news_analyst/20260309/result.json`
+  - `data/artifacts/analyst/macro_analyst/news_analyst/20260309/manifest.json`
+- 主键维度：`trade_date`
+- 说明：
+  - 最终输出键为 `news_analysis`
+  - `result.json` 保存结构化分析结果
+  - `manifest.json` 保存产物元信息与结果路径
 
 #### `agents.analyst.macro_analyst.market_sentiment_analyst`
 
-- 当前未发现独立本地结果文件命名规则
-- 当前结果主要停留在运行态 state 中，输出键为 `market_sentiment_analyst_summary`
+- 存储目录：`data/artifacts/analyst/macro_analyst/market_sentiment_analyst/{trade_date}/`
+- 文件名模板：
+  - `result.json`
+  - `manifest.json`
+- 示例：
+  - `data/artifacts/analyst/macro_analyst/market_sentiment_analyst/20260309/result.json`
+  - `data/artifacts/analyst/macro_analyst/market_sentiment_analyst/20260309/manifest.json`
+- 主键维度：`trade_date`
+- 说明：
+  - 最终输出键为 `market_sentiment_analyst_summary`
+  - `result.json` 保存结构化分析结果
+  - `manifest.json` 保存产物元信息与结果路径
 
 #### `agents.analyst.macro_analyst.liquidity_analyst`
 
-- 当前未发现独立本地结果文件命名规则
-- 当前结果主要停留在运行态 state 中，输出键为 `liquidity_analyst_summary`
+- 存储目录：`data/artifacts/analyst/macro_analyst/liquidity_analyst/{trade_date}/`
+- 文件名模板：
+  - `result.json`
+  - `manifest.json`
+- 示例：
+  - `data/artifacts/analyst/macro_analyst/liquidity_analyst/20260309/result.json`
+  - `data/artifacts/analyst/macro_analyst/liquidity_analyst/20260309/manifest.json`
+- 主键维度：`trade_date`
+- 说明：
+  - 最终输出键为 `liquidity_analyst_summary`
+  - `result.json` 保存结构化分析结果
+  - `manifest.json` 保存产物元信息与结果路径
 
 #### `agents.analyst.macro_analyst.commodity_analyst`
 
-- 当前未发现独立本地结果文件命名规则
-- 当前结果主要停留在运行态 state 中，输出键为 `commodity_analyst_summary`
+- 存储目录：`data/artifacts/analyst/macro_analyst/commodity_analyst/{trade_date}/`
+- 文件名模板：
+  - `result.json`
+  - `manifest.json`
+- 示例：
+  - `data/artifacts/analyst/macro_analyst/commodity_analyst/20260309/result.json`
+  - `data/artifacts/analyst/macro_analyst/commodity_analyst/20260309/manifest.json`
+- 主键维度：`trade_date`
+- 说明：
+  - 最终输出键为 `commodity_analyst_summary`
+  - `result.json` 保存结构化分析结果
+  - `manifest.json` 保存产物元信息与结果路径
 
 #### `agents.analyst.macro_analyst.macro_economist`
 
-- 当前未发现独立本地结果文件命名规则
-- 当前结果主要停留在运行态 state 中，输出键为 `macro_economist_analysis`
+- 存储目录：`data/artifacts/analyst/macro_analyst/macro_economist/{trade_date}/`
+- 文件名模板：
+  - `result.json`
+  - `manifest.json`
+- 示例：
+  - `data/artifacts/analyst/macro_analyst/macro_economist/20260309/result.json`
+  - `data/artifacts/analyst/macro_analyst/macro_economist/20260309/manifest.json`
+- 主键维度：`trade_date`
+- 说明：
+  - 最终输出键为 `macro_economist_analysis`
+  - `result.json` 保存结构化分析结果
+  - `manifest.json` 保存产物元信息与结果路径
 
 ### 2.2 行业层 Analyst
 
@@ -91,7 +141,9 @@
 
 - 当前未发现独立本地结果文件命名规则
 - 当前结果主要停留在运行态 state 中，输出键为 `macro_manager_summary`
-- 后续如果做缓存，主键应至少包含 `trade_date`
+- 当前会优先读取宏观层 5 个 analyst 的 `result.json`
+- 当前策略是：加载已有 analyst artifacts → 仅补跑缺失 analyst → 重新生成 `macro_manager_summary`
+- manager 自身目前不单独写入 `result.json`
 
 ### `agents.manager.sector_manager`
 

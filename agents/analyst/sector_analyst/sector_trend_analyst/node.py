@@ -13,17 +13,22 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 from langchain_core.runnables import RunnableConfig
 
-from ...utils import date_offset, extract_json_text, to_serializable
+from ....utils import date_offset, extract_json_text, to_serializable
 
 logger = logging.getLogger(__name__)
 
 SECTOR_TREND_LOOKBACK_DAYS = 120
+SECTOR_TREND_ARTIFACT_ROOT = (
+    Path("data") / "artifacts" / "analyst" / "sector_analyst" / "sector_trend_analyst"
+)
 
 
 def _clamp(x: float, lo: float, hi: float) -> float:
@@ -1561,8 +1566,61 @@ def create_sector_trend_insight_node(llm):
     return _insight_node
 
 
+def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
+    """原子写入 JSON，避免中途中断留下半成品。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, path)
+
+
+def create_sector_trend_result_persist_node():
+    """将最终输出键 sector_trend_insight 持久化到本地 artifacts。"""
+
+    def _persist_node(
+        state: Dict[str, Any],
+        config: Optional[RunnableConfig] = None,
+    ) -> Dict[str, Any]:
+        _ = config
+        insight = state.get("sector_trend_insight")
+        if not insight:
+            return state
+
+        trade_date = str(state.get("trade_date") or datetime.now().strftime("%Y%m%d")).replace("-", "")[:8]
+        artifact_dir = SECTOR_TREND_ARTIFACT_ROOT / trade_date
+        result_path = artifact_dir / "result.json"
+        manifest_path = artifact_dir / "manifest.json"
+
+        try:
+            _write_json_atomic(result_path, insight)
+            _write_json_atomic(
+                manifest_path,
+                {
+                    "artifact_type": "sector_trend_insight",
+                    "module": "agents.analyst.sector_analyst.sector_trend_analyst",
+                    "trade_date": trade_date,
+                    "created_at": datetime.now().astimezone().isoformat(),
+                    "status": "success",
+                    "result_path": result_path.as_posix(),
+                },
+            )
+            logger.info("sector_trend_insight 已写入本地 artifacts: %s", result_path)
+            return {
+                **state,
+                "sector_trend_artifact_path": result_path.as_posix(),
+                "sector_trend_manifest_path": manifest_path.as_posix(),
+            }
+        except Exception as e:
+            logger.warning("写入 sector_trend artifacts 失败: %s", e)
+            return state
+
+    return _persist_node
+
+
 __all__ = [
     "create_sector_trend_fetch_node",
     "create_sector_trend_analysis_node",
     "create_sector_trend_insight_node",
+    "create_sector_trend_result_persist_node",
 ]

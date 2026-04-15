@@ -1,24 +1,29 @@
 """
 Sector Capital Flow Analyst（板块资金流分析师）- 节点函数
 
-专注：同花顺概念/板块资金流（moneyflow_cnt_ths）与申万行业成交额（sw_daily），
-给出多窗口（1/5/10/20 日）的板块/行业资金流入/流出前 10 名。
+专注：同花顺概念/板块资金流（moneyflow_cnt_ths），
+给出多窗口（1/5/10/20 日）的板块资金流入/流出前 10 名。
 """
 import json
 import logging
+import os
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, Optional, List, Any, Set
 
 from langchain_core.runnables import RunnableConfig
 
 logger = logging.getLogger(__name__)
 
-from ...utils import date_offset, to_serializable, extract_json_text
+from ....utils import date_offset, to_serializable, extract_json_text
 
 
 # 最大回溯天数：为了覆盖 20 日窗口，适当多留一些缓冲（自然日）
 SECTOR_MONEYFLOW_LOOKBACK_DAYS =40
 _WINDOWS = (1, 5, 10, 20)
+SECTOR_CAPITAL_FLOW_ARTIFACT_ROOT = (
+    Path("data") / "artifacts" / "analyst" / "sector_analyst" / "sector_capital_flow_analyst"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +76,7 @@ def create_sector_capital_flow_fetch_node():
         allowed_ths_codes = _get_ni_ths_codes_from_db()
 
         ths_df = None
+        fetch_error = ""
         if fetch_moneyflow_cnt_ths_range is not None:
             try:
                 ths_df = fetch_moneyflow_cnt_ths_range(start_date=start_date, end_date=end_date)
@@ -85,19 +91,29 @@ def create_sector_capital_flow_fetch_node():
                         after_count,
                     )
             except Exception as e:
+                fetch_error = str(e)
                 logger.warning(
                     "fetch_moneyflow_cnt_ths_range 失败: start=%s end=%s error=%s",
                     start_date,
                     end_date,
                     e,
                 )
+        else:
+            fetch_error = "fetch_moneyflow_cnt_ths_range import failed"
+
+        records = to_serializable(ths_df)
+        record_count = len(records) if isinstance(records, list) else 0
+        fetch_status = "success" if record_count > 0 else ("error" if fetch_error else "empty")
 
         return {
-            "sector_moneyflow_data": to_serializable(ths_df),
+            "sector_moneyflow_data": records,
             "sector_moneyflow_meta": {
                 "start_date": start_date,
                 "end_date": end_date,
                 "lookback_days": SECTOR_MONEYFLOW_LOOKBACK_DAYS,
+                "fetch_status": fetch_status,
+                "fetch_error": fetch_error,
+                "record_count": record_count,
             },
         }
 
@@ -403,8 +419,61 @@ market_bias 表示整体资金面偏多/中性/偏空。无明显方向时 marke
     return _insight_node
 
 
+def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
+    """原子写入 JSON，避免中途中断留下半成品。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, path)
+
+
+def create_sector_capital_flow_result_persist_node():
+    """将最终输出键 sector_capital_flow_insight 持久化到本地 artifacts。"""
+
+    def _persist_node(
+        state: Dict[str, Any],
+        config: Optional[RunnableConfig] = None,
+    ) -> Dict[str, Any]:
+        _ = config
+        insight = state.get("sector_capital_flow_insight")
+        if not insight:
+            return state
+
+        trade_date = str(state.get("trade_date") or datetime.now().strftime("%Y%m%d")).replace("-", "")[:8]
+        artifact_dir = SECTOR_CAPITAL_FLOW_ARTIFACT_ROOT / trade_date
+        result_path = artifact_dir / "result.json"
+        manifest_path = artifact_dir / "manifest.json"
+
+        try:
+            _write_json_atomic(result_path, insight)
+            _write_json_atomic(
+                manifest_path,
+                {
+                    "artifact_type": "sector_capital_flow_insight",
+                    "module": "agents.analyst.sector_analyst.sector_capital_flow_analyst",
+                    "trade_date": trade_date,
+                    "created_at": datetime.now().astimezone().isoformat(),
+                    "status": "success",
+                    "result_path": result_path.as_posix(),
+                },
+            )
+            logger.info("sector_capital_flow_insight 已写入本地 artifacts: %s", result_path)
+            return {
+                **state,
+                "sector_capital_flow_artifact_path": result_path.as_posix(),
+                "sector_capital_flow_manifest_path": manifest_path.as_posix(),
+            }
+        except Exception as e:
+            logger.warning("写入 sector_capital_flow artifacts 失败: %s", e)
+            return state
+
+    return _persist_node
+
+
 __all__ = [
     "create_sector_capital_flow_fetch_node",
     "create_sector_capital_flow_analysis_node",
     "create_sector_capital_flow_insight_node",
+    "create_sector_capital_flow_result_persist_node",
 ]

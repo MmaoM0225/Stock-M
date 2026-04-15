@@ -1,8 +1,7 @@
 """
 Sector Manager（行业管理器）- 图结构
 
-流程：START → run_analysts（并行运行 2 个行业分析师子图）
-     → sector_summary → END
+流程：START → detect_available_analysts → run_analysts（仅补跑缺失子图）→ sector_summary → END
 """
 from typing import Any, List, Optional, Tuple
 
@@ -11,6 +10,8 @@ from langgraph.graph import END, START, StateGraph
 from agents.config import SECTOR_MANAGER_MAX_CONCURRENT_SUBGRAPHS
 
 from .node import (
+    create_detect_available_analysts_node,
+    create_load_macro_manager_summary_node,
     create_run_analysts_node,
     create_sector_summary_node,
 )
@@ -23,7 +24,7 @@ def create_sector_manager_graph(
     """
     构建 Sector Manager 图：编排行业趋势与板块资金流两个分析师子图，控制并发并汇总结果。
 
-    流程：run_analysts 内并行执行 2 个子图 → sector_summary（LLM 综合结论）→ END。
+流程：先检测本地已存在的 analyst 结果，仅补跑缺失子图，再加载 macro_manager 输出，最后执行 sector_summary → END。
     """
     max_workers = (
         max_concurrent_subgraphs
@@ -47,17 +48,26 @@ def create_sector_manager_graph(
     ]
 
     builder = StateGraph(dict)
+    run_analysts_node = create_run_analysts_node(
+        analyst_tasks=analyst_tasks,
+        max_workers=max_workers,
+    )
+    detect_available_analysts_node = create_detect_available_analysts_node(analyst_tasks)
+    load_macro_manager_summary_node = create_load_macro_manager_summary_node()
+    sector_summary_node = create_sector_summary_node(llm=llm)
+
+    builder.add_node("detect_available_analysts", detect_available_analysts_node)
     builder.add_node(
         "run_analysts",
-        create_run_analysts_node(
-            analyst_tasks=analyst_tasks,
-            max_workers=max_workers,
-        ),
+        run_analysts_node,
     )
-    builder.add_node("sector_summary", create_sector_summary_node(llm=llm))
+    builder.add_node("load_macro_manager_summary", load_macro_manager_summary_node)
+    builder.add_node("sector_summary", sector_summary_node)
 
-    builder.add_edge(START, "run_analysts")
-    builder.add_edge("run_analysts", "sector_summary")
+    builder.add_edge(START, "detect_available_analysts")
+    builder.add_edge("detect_available_analysts", "run_analysts")
+    builder.add_edge("run_analysts", "load_macro_manager_summary")
+    builder.add_edge("load_macro_manager_summary", "sector_summary")
     builder.add_edge("sector_summary", END)
 
     return builder.compile()

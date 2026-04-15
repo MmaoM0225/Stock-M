@@ -36,8 +36,8 @@ def main() -> None:
 
     from langchain_openai import ChatOpenAI
 
-    from ...callbacks import get_llm_callbacks
-    from ...config import get_llm_config, validate_config
+    from ....callbacks import get_llm_callbacks
+    from ....config import get_llm_config, validate_config
 
     parser = argparse.ArgumentParser(description="Sector Trend Analyst Demo")
     parser.add_argument("date", nargs="?", help="交易日期 YYYYMMDD")
@@ -89,18 +89,17 @@ def main() -> None:
         print("无趋势结果。")
         return
 
-    for source_key, source_name in [("ths_concept", "THS 概念/板块"), ("sw_industry", "申万行业")]:
-        src = rank.get(source_key) or {}
-        print(f"\n================ {source_name} ================")
-        print("\n--- trend_strength_board (前3) ---")
-        for item in (src.get("trend_strength_board") or [])[:3]:
-            pprint(item)
-        print("\n--- reversal_recovery_board (前3) ---")
-        for item in (src.get("reversal_recovery_board") or [])[:3]:
-            pprint(item)
-        print("\n--- top_reversal_warning_board (前3) ---")
-        for item in (src.get("top_reversal_warning_board") or [])[:3]:
-            pprint(item)
+    src = rank.get("ths_concept") or {}
+    print("\n================ THS 概念/板块 ================")
+    print("\n--- trend_strength_board (前3) ---")
+    for item in (src.get("trend_strength_board") or [])[:3]:
+        pprint(item)
+    print("\n--- reversal_recovery_board (前3) ---")
+    for item in (src.get("reversal_recovery_board") or [])[:3]:
+        pprint(item)
+    print("\n--- top_reversal_warning_board (前3) ---")
+    for item in (src.get("top_reversal_warning_board") or [])[:3]:
+        pprint(item)
 
 
 if __name__ == "__main__":

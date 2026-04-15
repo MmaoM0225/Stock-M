@@ -1,7 +1,7 @@
 """
 Market Sentiment Analyst（市场情绪分析师）- 图结构
 
-流程：market_sentiment_fetch → [market_sentiment_analysis（按指数并行）] → market_sentiment_reduce → END
+流程：market_sentiment_fetch → [market_sentiment_analysis（按指数并行）] → market_sentiment_reduce → market_sentiment_result_persist → END
 """
 import operator
 from typing import Dict, Any, List, Optional
@@ -11,13 +11,14 @@ from typing_extensions import Annotated, TypedDict
 from langgraph.constants import Send
 from langgraph.graph import StateGraph, START, END
 
-from ...config import MACRO_DEFAULT_INDEX_CODES
-from ...utils import get_market_sentiment_config, resolve_index_items
+from ....config import MACRO_DEFAULT_INDEX_CODES
+from ....utils import get_market_sentiment_config, resolve_index_items
 
 from .node import (
     create_market_sentiment_fetch_node,
     create_market_sentiment_analysis_node,
     create_market_sentiment_reduce_node,
+    create_market_sentiment_result_persist_node,
 )
 
 
@@ -28,6 +29,8 @@ class MarketSentimentAnalystState(TypedDict, total=False):
     index_info: List[Dict[str, Any]]
     market_index_chunk: Annotated[List[Dict[str, Any]], operator.add]
     market_sentiment_analyst_summary: Dict[str, Any]
+    market_sentiment_artifact_path: str
+    market_sentiment_manifest_path: str
 
 
 def _fan_out_to_indices(state: Dict[str, Any], config: RunnableConfig | None = None) -> List[Send]:
@@ -64,7 +67,7 @@ def create_market_sentiment_analyst_graph(
     """
     构建 Market Sentiment Analyst 图。
 
-    流程：fetch（指数日线）→ 按指数并行 analysis → reduce → END
+    流程：fetch（指数日线）→ 按指数并行 analysis → reduce → 持久化结果 → END
 
     Args:
         llm: LLM 实例，用于分析节点
@@ -82,10 +85,12 @@ def create_market_sentiment_analyst_graph(
     )
     builder.add_node("market_sentiment_analysis", create_market_sentiment_analysis_node(llm))
     builder.add_node("market_sentiment_reduce", create_market_sentiment_reduce_node(llm))
+    builder.add_node("market_sentiment_result_persist", create_market_sentiment_result_persist_node())
 
     builder.add_edge(START, "market_sentiment_fetch")
     builder.add_conditional_edges("market_sentiment_fetch", _fan_out_to_indices)
     builder.add_edge("market_sentiment_analysis", "market_sentiment_reduce")
-    builder.add_edge("market_sentiment_reduce", END)
+    builder.add_edge("market_sentiment_reduce", "market_sentiment_result_persist")
+    builder.add_edge("market_sentiment_result_persist", END)
 
     return builder.compile()

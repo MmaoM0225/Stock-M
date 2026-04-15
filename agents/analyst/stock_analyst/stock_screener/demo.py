@@ -5,7 +5,7 @@ Stock Screener（股票筛选分析师）Demo
     python -m agents.analyst.stock_analyst.stock_screener.demo 20260328
 
 筛选条件可在 main() 中修改，支持：
-- sectors: 行业列表
+- sectors: 板块列表（支持多板块；未传时自动读取 sector_manager 输出）
 - min_market_cap/max_market_cap: 市值范围（元）
 - min_pe/max_pe: 市盈率范围
 - min_pb/max_pb: 市净率范围
@@ -57,36 +57,14 @@ def main():
     graph = create_stock_screener_graph()
 
     # ========== 筛选条件示例 ==========
-    # # 示例1: 大盘股 (100亿以上)
+    # 示例1: 使用 sector_manager 动态板块（推荐；由筛选模板决策节点自动选择每板块策略）
     criteria = {
-        "trade_date": "20260403",
-        "min_market_cap": 100e8,  # 100亿以上
+        "trade_date": trade_date,
+        "min_market_cap": 80e8,  # 统一底线约束；具体板块可被模板细化
         "exclude_st": True,
         "max_stocks": 20,
-        "sort_by": "dv_ratio",
-        "sort_order": "desc",
     }
 
-    # 示例2: 低估值 (PE < 20, PB < 3)
-    # criteria = {
-    #     "trade_date": trade_date,
-    #     "max_pe": 20,
-    #     "max_pb": 3,
-    #     "exclude_st": True,
-    #     "max_stocks": 30,
-    #     "sort_by": "pe",
-    # }
-
-    # 示例3: 结合板块筛选
-    # criteria = {
-    #     "trade_date": "20260403",
-    #     "sectors": ["共封装光学(CPO)"],
-    #     "min_market_cap": 100e8,
-    #     "exclude_st": True,
-    #     "max_stocks": 50,
-    #     "sort_by": "total_mv",
-    #     "sort_order": "desc",  # 正序：PE 从低到高；倒序用 "desc" 或 "倒序"
-    # }
 
     result = graph.invoke(criteria)
 

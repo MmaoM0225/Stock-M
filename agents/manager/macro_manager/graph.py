@@ -1,7 +1,7 @@
 """
 Macro Manager（宏观管理器）- 图结构
 
-流程：START → run_analysts（并行运行 5 个分析师子图）→ macro_summary → END
+流程：START → detect_available_analysts → run_analysts（仅补跑缺失子图）→ macro_summary → END
 """
 from typing import Any, List, Optional, Tuple
 
@@ -9,7 +9,11 @@ from langgraph.graph import END, START, StateGraph
 
 from agents.config import MACRO_MANAGER_MAX_CONCURRENT_SUBGRAPHS
 
-from .node import create_macro_summary_node, create_run_analysts_node
+from .node import (
+    create_detect_available_analysts_node,
+    create_macro_summary_node,
+    create_run_analysts_node,
+)
 
 
 def create_macro_manager_graph(
@@ -20,7 +24,7 @@ def create_macro_manager_graph(
     """
     构建 Macro Manager 图：编排 5 个微观分析师子图，控制并发并汇总结果。
 
-    流程：run_analysts 内并行执行 5 个子图 → macro_summary（LLM 综合结论）→ END。
+    流程：先检测本地已存在的 analyst 结果，仅补跑缺失子图，再统一执行 macro_summary → END。
 
     Args:
         llm: LLM 实例，供各分析师子图共用
@@ -70,11 +74,14 @@ def create_macro_manager_graph(
         analyst_tasks,
         max_workers=max_workers,
     )
+    detect_available_analysts_node = create_detect_available_analysts_node(analyst_tasks)
     macro_summary_node = create_macro_summary_node(llm=llm)
     builder = StateGraph(dict)
+    builder.add_node("detect_available_analysts", detect_available_analysts_node)
     builder.add_node("run_analysts", run_analysts_node)
     builder.add_node("macro_summary", macro_summary_node)
-    builder.add_edge(START, "run_analysts")
+    builder.add_edge(START, "detect_available_analysts")
+    builder.add_edge("detect_available_analysts", "run_analysts")
     builder.add_edge("run_analysts", "macro_summary")
     builder.add_edge("macro_summary", END)
 

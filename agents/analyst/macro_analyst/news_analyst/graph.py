@@ -10,6 +10,7 @@ from .node import (
     map_sections_to_extract,
     create_news_extract_node,
     create_news_reduce_node,
+    create_news_result_persist_node,
 )
 
 
@@ -30,6 +31,8 @@ class NewsState(TypedDict, total=False):
     # 使用 Annotated + operator.add 让 LangGraph 自动做 map-reduce 聚合
     events: Annotated[List[Dict[str, Any]], operator.add]
     news_analysis: Dict[str, Any]
+    news_analysis_artifact_path: str
+    news_analysis_manifest_path: str
     messages: List[Any]
 
 def create_news_graph(llm, fetcher: Optional[Any] = None):
@@ -41,6 +44,7 @@ def create_news_graph(llm, fetcher: Optional[Any] = None):
     2. map_sections_to_extract：根据 news_sections 动态生成并行的 news_extract 调用（Send）
     3. news_extract：对单条新闻 section 抽取结构化事件（LLM 判断），写入 events
     4. news_reduce：对所有 events 做板块与宏观环境汇总，写入 news_analysis
+    5. news_result_persist：将最终输出写入本地 artifacts
 
     Args:
         llm: 支持 with_structured_output 的 LLM 实例
@@ -55,6 +59,7 @@ def create_news_graph(llm, fetcher: Optional[Any] = None):
     builder.add_node("news_fetch", create_news_fetch_node(fetcher))
     builder.add_node("news_extract", create_news_extract_node(llm))
     builder.add_node("news_reduce", create_news_reduce_node(llm))
+    builder.add_node("news_result_persist", create_news_result_persist_node())
 
     # 起点：从 START 进入 fetch
     builder.add_edge(START, "news_fetch")
@@ -65,7 +70,8 @@ def create_news_graph(llm, fetcher: Optional[Any] = None):
     # 每个 extract 完成后，将事件写入 events，LangGraph 会按 Annotated 规则自动累加
     builder.add_edge("news_extract", "news_reduce")
 
-    # 汇总节点输出最终分析结果后直接结束
-    builder.add_edge("news_reduce", END)
+    # 汇总完成后将最终结果落盘，再结束
+    builder.add_edge("news_reduce", "news_result_persist")
+    builder.add_edge("news_result_persist", END)
 
     return builder.compile()
