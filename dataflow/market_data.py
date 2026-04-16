@@ -1120,6 +1120,76 @@ class MarketDataFetcher:
             logger.error(f"获取同花顺概念板块成分失败: {e}")
             raise DataFlowException(f"获取同花顺概念板块成分失败: {e}")
 
+    def fetch_trade_cal(
+        self,
+        exchange: str = 'SSE',
+        start_date: str = None,
+        end_date: str = None,
+        is_open: str = None
+    ) -> pd.DataFrame:
+        """
+        获取交易日历数据
+        
+        获取各大交易所交易日历数据，默认提取的是上交所(SSE)。
+        
+        Args:
+            exchange: 交易所代码，默认为'SSE'
+                     SSE: 上交所, SZSE: 深交所, CFFEX: 中金所, SHFE: 上期所,
+                     CZCE: 郑商所, DCE: 大商所, INE: 上能源
+            start_date: 开始日期，格式YYYYMMDD
+            end_date: 结束日期，格式YYYYMMDD
+            is_open: 是否交易，'0'休市, '1'交易。可选，不填则返回全部
+        
+        Returns:
+            pd.DataFrame: 包含以下字段的交易日历数据
+                - exchange (str): 交易所代码 SSE/SZSE
+                - cal_date (str): 日历日期 YYYYMMDD
+                - is_open (str): 是否交易 0休市 1交易
+                - pretrade_date (str): 上一个交易日 YYYYMMDD
+        
+        Raises:
+            DataFlowException: 当 Tushare 未配置或数据获取失败时
+        
+        Note:
+            - 需2000积分
+            - 单次提取无明确限制，建议按需指定日期范围
+        
+        Example:
+            >>> df = fetcher.fetch_trade_cal(exchange='SSE', start_date='20180101', end_date='20181231')
+            >>> df = fetcher.fetch_trade_cal(exchange='SZSE', start_date='20240101', end_date='20241231', is_open='1')
+        """
+        if not self.tushare_enabled:
+            raise DataFlowException("Tushare未配置或未启用")
+        
+        try:
+            kwargs: Dict[str, Any] = {}
+            if exchange:
+                kwargs['exchange'] = exchange
+            if start_date:
+                kwargs['start_date'] = format_date(start_date, 'tushare')
+            if end_date:
+                kwargs['end_date'] = format_date(end_date, 'tushare')
+            if is_open is not None:
+                kwargs['is_open'] = is_open
+            
+            logger.info(f"获取交易日历: exchange={exchange}, start={start_date}, end={end_date}, is_open={is_open}")
+            
+            df = self.ts_pro.trade_cal(**kwargs)
+            
+            if df.empty:
+                logger.warning(f"未获取到交易日历数据")
+                return pd.DataFrame()
+            
+            df = clean_dataframe(df)
+            df = df.sort_values('cal_date').reset_index(drop=True)
+            
+            logger.info(f"成功获取 {len(df)} 条交易日历数据")
+            return df
+            
+        except Exception as e:
+            logger.error(f"获取交易日历失败: {e}")
+            raise DataFlowException(f"获取交易日历失败: {e}")
+
 
 # 便捷函数（远程获取）
 def fetch_stock_basic(
@@ -1425,4 +1495,38 @@ def fetch_ths_member(
     """
     fetcher = MarketDataFetcher()
     return fetcher.fetch_ths_member(ts_code, con_code)
+
+
+def fetch_trade_cal(
+    exchange: str = 'SSE',
+    start_date: str = None,
+    end_date: str = None,
+    is_open: str = None
+) -> pd.DataFrame:
+    """
+    获取交易日历数据的便捷函数（远程）
+    
+    获取各大交易所交易日历数据，默认提取的是上交所(SSE)。
+    
+    Args:
+        exchange: 交易所代码，默认为'SSE'
+                 SSE: 上交所, SZSE: 深交所, CFFEX: 中金所, SHFE: 上期所,
+                 CZCE: 郑商所, DCE: 大商所, INE: 上能源
+        start_date: 开始日期，格式YYYYMMDD
+        end_date: 结束日期，格式YYYYMMDD
+        is_open: 是否交易，'0'休市, '1'交易。可选，不填则返回全部
+    
+    Returns:
+        交易日历DataFrame，包含字段:
+            - exchange: 交易所代码
+            - cal_date: 日历日期
+            - is_open: 是否交易 0休市 1交易
+            - pretrade_date: 上一个交易日
+    
+    Example:
+        >>> df = fetch_trade_cal(exchange='SSE', start_date='20180101', end_date='20181231')
+        >>> df = fetch_trade_cal(exchange='SZSE', start_date='20240101', end_date='20241231', is_open='1')
+    """
+    fetcher = MarketDataFetcher()
+    return fetcher.fetch_trade_cal(exchange, start_date, end_date, is_open)
 

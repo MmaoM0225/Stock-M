@@ -1,0 +1,439 @@
+"""
+投资组合净值可视化程序
+读取历史 portfolio_book 数据，绘制资金净值曲线并与上证指数对比
+
+使用方法:
+    python -m visualization.portfolio_nav_visualization          # 显示图表
+    python -m visualization.portfolio_nav_visualization --no-show # 仅保存不显示
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Tuple, Optional
+
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from matplotlib import font_manager
+import numpy as np
+
+
+# 设置中文字体
+plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'DejaVu Sans']
+plt.rcParams['axes.unicode_minus'] = False
+
+
+def parse_position_percentage(position_str: str) -> float:
+    """解析仓位百分比字符串，如 '8.18%' -> 8.18"""
+    if isinstance(position_str, (int, float)):
+        return float(position_str)
+    if isinstance(position_str, str):
+        return float(position_str.replace("%", ""))
+    return 0.0
+
+
+def read_portfolio_history(data_dir: str) -> List[Dict]:
+    """读取所有历史 portfolio_book 数据，包含仓位信息"""
+    history = []
+    portfolio_dir = Path(data_dir) / "artifacts" / "decision" / "portfolio_book"
+    
+    if not portfolio_dir.exists():
+        raise FileNotFoundError(f"Portfolio book 目录不存在: {portfolio_dir}")
+    
+    for date_dir in sorted(portfolio_dir.iterdir()):
+        if date_dir.is_dir():
+            result_file = date_dir / "result.json"
+            if result_file.exists():
+                with open(result_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    portfolio_table = data.get("portfolio_table", [])
+                    
+                    # 计算仓位（非现金仓位 = 总仓位 - 现金仓位）
+                    cash_position = 0.0
+                    stock_position = 0.0
+                    
+                    for asset in portfolio_table:
+                        position_str = asset.get("仓位", "0%")
+                        position = parse_position_percentage(position_str)
+                        asset_type = asset.get("资产类型", "")
+                        asset_name = asset.get("资产名称", "")
+                        
+                        if asset_type == "其他" or asset_name == "待投资现金":
+                            cash_position = position
+                        else:
+                            stock_position += position
+                    
+                    history.append({
+                        "trade_date": data.get("trade_date"),
+                        "total_capital": data.get("meta", {}).get("total_capital", 0),
+                        "initial_capital": data.get("meta", {}).get("initial_capital", 0),
+                        "stock_position": stock_position,
+                        "cash_position": cash_position,
+                        "total_position": stock_position + cash_position,
+                    })
+    
+    return sorted(history, key=lambda x: x["trade_date"])
+
+
+def calculate_nav(history: List[Dict]) -> Tuple[List[datetime], List[float], List[float]]:
+    """计算净值曲线
+    
+    返回:
+        dates: 日期列表
+        nav_values: 净值列表（以初始资金为1）
+        total_capitals: 总资金列表
+    """
+    dates = []
+    nav_values = []
+    total_capitals = []
+    
+    if not history:
+        return dates, nav_values, total_capitals
+    
+    # 使用第一个记录的 initial_capital 作为基准
+    base_capital = history[0].get("initial_capital", history[0].get("total_capital", 1))
+    if base_capital == 0:
+        base_capital = 1
+    
+    for record in history:
+        date_str = record["trade_date"]
+        date = datetime.strptime(date_str, "%Y%m%d")
+        total_capital = record.get("total_capital", 0)
+        
+        dates.append(date)
+        total_capitals.append(total_capital)
+        nav_values.append(total_capital / base_capital)
+    
+    return dates, nav_values, total_capitals
+
+
+def load_sh_index_data() -> Dict[str, float]:
+    """加载上证指数数据（示例数据，实际应从数据源获取）
+    
+    返回: {日期字符串: 收盘点位} 的字典
+    """
+    # 这里是示例数据，实际使用时应从数据库或API获取
+    # 数据为2025年1月至5月的上证指数近似值
+    sample_data = {
+        "20250102": 3350.0,
+        "20250109": 3220.0,
+        "20250116": 3240.0,
+        "20250123": 3210.0,
+        "20250207": 3300.0,
+        "20250214": 3340.0,
+        "20250221": 3380.0,
+        "20250228": 3320.0,
+        "20250307": 3380.0,
+        "20250314": 3420.0,
+        "20250321": 3360.0,
+        "20250328": 3350.0,
+        "20250407": 3200.0,
+        "20250414": 3280.0,
+        "20250421": 3300.0,
+        "20250428": 3320.0,
+        "20250508": 3350.0,
+    }
+    return sample_data
+
+
+def align_sh_index(
+    portfolio_dates: List[datetime], 
+    portfolio_nav: List[float],
+    sh_index_data: Dict[str, float]
+) -> Tuple[List[float], List[float]]:
+    """对齐上证指数数据与组合净值数据
+    
+    以上证指数首个交易日的值为基准，计算相对涨跌幅
+    """
+    sh_values = []
+    sh_nav = []
+    
+    # 找到第一个有效数据点作为基准
+    base_value = None
+    for date in portfolio_dates:
+        date_str = date.strftime("%Y%m%d")
+        if date_str in sh_index_data:
+            base_value = sh_index_data[date_str]
+            break
+    
+    if base_value is None or base_value == 0:
+        base_value = 3300.0  # 默认值
+    
+    for date in portfolio_dates:
+        date_str = date.strftime("%Y%m%d")
+        if date_str in sh_index_data:
+            value = sh_index_data[date_str]
+            sh_values.append(value)
+            sh_nav.append(value / base_value)
+        else:
+            # 如果当天没有数据，使用前一个值或None
+            if sh_nav:
+                sh_nav.append(sh_nav[-1])
+            else:
+                sh_nav.append(1.0)
+    
+    return sh_values, sh_nav
+
+
+def calculate_performance_metrics(
+    dates: List[datetime],
+    nav_values: List[float],
+    sh_nav: List[float]
+) -> Dict:
+    """计算业绩指标"""
+    metrics = {}
+    
+    if len(nav_values) < 2:
+        return metrics
+    
+    # 总收益率
+    metrics["total_return"] = (nav_values[-1] - 1) * 100
+    metrics["sh_total_return"] = (sh_nav[-1] - 1) * 100 if sh_nav else 0
+    
+    # 超额收益
+    metrics["excess_return"] = metrics["total_return"] - metrics["sh_total_return"]
+    
+    # 计算日收益率序列
+    daily_returns = []
+    for i in range(1, len(nav_values)):
+        daily_returns.append((nav_values[i] - nav_values[i-1]) / nav_values[i-1])
+    
+    # 年化收益率（简化计算）
+    days = (dates[-1] - dates[0]).days
+    if days > 0:
+        metrics["annualized_return"] = ((nav_values[-1] / nav_values[0]) ** (365.0 / days) - 1) * 100
+    
+    # 最大回撤
+    peak = nav_values[0]
+    max_drawdown = 0
+    for nav in nav_values:
+        if nav > peak:
+            peak = nav
+        drawdown = (peak - nav) / peak
+        max_drawdown = max(max_drawdown, drawdown)
+    metrics["max_drawdown"] = max_drawdown * 100
+    
+    # 波动率（年化）
+    if daily_returns:
+        volatility = np.std(daily_returns) * np.sqrt(252) * 100
+        metrics["volatility"] = volatility
+    
+    # 夏普比率（简化，假设无风险利率为2%）
+    if "annualized_return" in metrics and "volatility" in metrics:
+        risk_free_rate = 2.0
+        if metrics["volatility"] > 0:
+            metrics["sharpe_ratio"] = (metrics["annualized_return"] - risk_free_rate) / metrics["volatility"]
+    
+    return metrics
+
+
+def plot_combined_chart(
+    dates_nav: List[datetime],
+    nav_values: List[float],
+    sh_nav: List[float],
+    dates_position: List[datetime],
+    stock_positions: List[float],
+    cash_positions: List[float],
+    total_capitals: List[float],
+    metrics: Dict,
+    output_path: Optional[str] = None,
+    show_plot: bool = True
+):
+    """绘制组合图表：上面收益对比，下面仓位变化
+    
+    Args:
+        dates_nav: 净值日期列表
+        nav_values: 净值列表
+        sh_nav: 上证指数净值列表
+        dates_position: 仓位日期列表
+        stock_positions: 股票仓位列表（%）
+        cash_positions: 现金仓位列表（%）
+        total_capitals: 总资金列表
+        metrics: 业绩指标字典
+        output_path: 图表保存路径
+        show_plot: 是否显示图表（在后台模式下设为False）
+    """
+    # 在无图形界面环境下使用非交互式后端
+    if not show_plot:
+        plt.switch_backend('Agg')
+    
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), gridspec_kw={'height_ratios': [2, 1]})
+    
+    # ========== 子图1: 收益对比（净值）==========
+    ax1.plot(dates_nav, nav_values, 'b-', linewidth=2, label='投资组合净值', marker='o', markersize=4)
+    if sh_nav:
+        ax1.plot(dates_nav, sh_nav, 'r--', linewidth=1.5, label='上证指数（归一化）', marker='s', markersize=3, alpha=0.7)
+    
+    ax1.set_ylabel('净值（初始=1）', fontsize=12)
+    ax1.set_title('投资组合净值走势 vs 上证指数', fontsize=14, fontweight='bold')
+    ax1.legend(loc='upper left', fontsize=10)
+    ax1.grid(True, alpha=0.3)
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+    ax1.xaxis.set_major_locator(mdates.WeekdayLocator(interval=2))
+    plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45, ha='right')
+    
+    # 添加业绩指标文本框（移到右下角，避免与图例重叠）
+    metrics_text = f"""业绩指标:
+组合收益: {metrics.get('total_return', 0):.2f}%
+上证收益: {metrics.get('sh_total_return', 0):.2f}%
+超额收益: {metrics.get('excess_return', 0):.2f}%
+最大回撤: {metrics.get('max_drawdown', 0):.2f}%
+年化收益: {metrics.get('annualized_return', 0):.2f}%
+夏普比率: {metrics.get('sharpe_ratio', 0):.2f}"""
+    
+    ax1.text(0.98, 0.02, metrics_text, transform=ax1.transAxes, fontsize=9,
+             verticalalignment='bottom', horizontalalignment='right',
+             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    
+    # ========== 子图2: 仓位变化 ==========
+    ax2.fill_between(dates_position, stock_positions, alpha=0.3, color='blue', label='股票仓位')
+    ax2.plot(dates_position, stock_positions, 'b-', linewidth=2, marker='o', markersize=4)
+    ax2.plot(dates_position, cash_positions, 'g--', linewidth=1.5, label='现金仓位', marker='s', markersize=3, alpha=0.7)
+    
+    # 添加仓位区域标注
+    ax2.fill_between(dates_position, 0, stock_positions, alpha=0.1, color='blue')
+    
+    ax2.set_ylabel('仓位 (%)', fontsize=12)
+    ax2.set_xlabel('日期', fontsize=12)
+    ax2.set_title('仓位变化趋势', fontsize=12)
+    ax2.legend(loc='upper right', fontsize=9)
+    ax2.grid(True, alpha=0.3)
+    ax2.set_ylim(0, 100)
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+    ax2.xaxis.set_major_locator(mdates.WeekdayLocator(interval=2))
+    plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha='right')
+    
+    # 添加关键仓位水平线
+    ax2.axhline(y=50, color='gray', linestyle='--', alpha=0.5, linewidth=0.8)
+    ax2.axhline(y=70, color='orange', linestyle='--', alpha=0.5, linewidth=0.8)
+    ax2.text(dates_position[-1], 50, ' 50%', fontsize=8, color='gray', va='center')
+    ax2.text(dates_position[-1], 70, ' 70%', fontsize=8, color='orange', va='center')
+    
+    # 添加最新仓位标注
+    if stock_positions:
+        ax2.annotate(f'股票: {stock_positions[-1]:.1f}%', 
+                    xy=(dates_position[-1], stock_positions[-1]),
+                    xytext=(-50, 15), textcoords='offset points',
+                    fontsize=9, color='blue',
+                    arrowprops=dict(arrowstyle='->', color='blue', lw=1.5))
+        ax2.annotate(f'现金: {cash_positions[-1]:.1f}%', 
+                    xy=(dates_position[-1], cash_positions[-1]),
+                    xytext=(-50, -20), textcoords='offset points',
+                    fontsize=9, color='green',
+                    arrowprops=dict(arrowstyle='->', color='green', lw=1.5))
+    
+    # 添加资金总额文本标注
+    if total_capitals:
+        capital_text = f"资金: {total_capitals[0]/10000:.1f}万 → {total_capitals[-1]/10000:.1f}万"
+        ax2.text(0.02, 0.98, capital_text, transform=ax2.transAxes, fontsize=9,
+                 verticalalignment='top', horizontalalignment='left',
+                 bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.5))
+    
+    plt.tight_layout()
+    
+    if output_path:
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        print(f"图表已保存: {output_path}")
+    
+    if show_plot:
+        plt.show()
+    else:
+        plt.close(fig)
+
+
+def main(show_plot: bool = True):
+    """主函数
+    
+    Args:
+        show_plot: 是否显示图表窗口（在后台模式下设为False）
+    """
+    # 确定数据目录
+    script_dir = Path(__file__).parent
+    data_dir = script_dir.parent / "data"
+    
+    print("=" * 60)
+    print("投资组合可视化")
+    print("=" * 60)
+    
+    # 读取历史数据
+    print("\n读取 portfolio_book 历史数据...")
+    try:
+        history = read_portfolio_history(str(data_dir))
+    except FileNotFoundError as e:
+        print(f"错误: {e}")
+        print("请确认数据目录路径正确")
+        return
+    
+    if not history:
+        print("未找到任何 portfolio_book 数据")
+        return
+    
+    print(f"成功读取 {len(history)} 条历史记录")
+    
+    # 显示数据概览
+    print("\n数据概览:")
+    print(f"  起始日期: {history[0]['trade_date']}")
+    print(f"  结束日期: {history[-1]['trade_date']}")
+    print(f"  初始资金: {history[0].get('initial_capital', 'N/A'):,.2f} 元")
+    print(f"  最新资金: {history[-1]['total_capital']:,.2f} 元")
+    print(f"  最新股票仓位: {history[-1].get('stock_position', 0):.2f}%")
+    print(f"  最新现金仓位: {history[-1].get('cash_position', 0):.2f}%")
+    
+    # 提取仓位数据
+    dates_position = []
+    stock_positions = []
+    cash_positions = []
+    total_capitals = []
+    
+    for record in history:
+        date_str = record["trade_date"]
+        dates_position.append(datetime.strptime(date_str, "%Y%m%d"))
+        stock_positions.append(record.get("stock_position", 0))
+        cash_positions.append(record.get("cash_position", 0))
+        total_capitals.append(record.get("total_capital", 0))
+    
+    # 计算净值用于业绩指标
+    dates_nav, nav_values, _ = calculate_nav(history)
+    
+    # 加载上证指数数据
+    sh_index_data = load_sh_index_data()
+    sh_values, sh_nav = align_sh_index(dates_nav, nav_values, sh_index_data)
+    
+    # 计算业绩指标
+    metrics = calculate_performance_metrics(dates_nav, nav_values, sh_nav)
+    
+    # 打印业绩指标
+    print("\n业绩指标:")
+    print(f"  组合总收益率: {metrics.get('total_return', 0):.2f}%")
+    print(f"  上证总收益率: {metrics.get('sh_total_return', 0):.2f}%")
+    print(f"  超额收益: {metrics.get('excess_return', 0):.2f}%")
+    print(f"  最大回撤: {metrics.get('max_drawdown', 0):.2f}%")
+    if 'annualized_return' in metrics:
+        print(f"  年化收益率: {metrics['annualized_return']:.2f}%")
+    if 'sharpe_ratio' in metrics:
+        print(f"  夏普比率: {metrics['sharpe_ratio']:.2f}")
+    
+    # 绘制组合图表
+    print("\n生成可视化图表...")
+    output_path = script_dir / "portfolio_combined_chart.png"
+    plot_combined_chart(
+        dates_nav, nav_values, sh_nav,
+        dates_position, stock_positions, cash_positions, total_capitals,
+        metrics, str(output_path), show_plot=show_plot
+    )
+    
+    print(f"图表文件: {output_path}")
+    print("\n完成!")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="投资组合净值可视化")
+    parser.add_argument("--no-show", action="store_true", help="不显示图表，仅保存到文件")
+    parser.add_argument("--output", "-o", type=str, default=None, help="输出文件路径")
+    args = parser.parse_args()
+    
+    main(show_plot=not args.no_show)

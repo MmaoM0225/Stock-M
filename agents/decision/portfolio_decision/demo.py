@@ -48,7 +48,7 @@ def main() -> None:
     parser.add_argument("--sector-result", default=None, help="覆盖 sector_manager result.json 路径")
     parser.add_argument("--stock-pool-result", default=None, help="覆盖 stock_pool_manager result.json 路径")
     parser.add_argument("--macro-result", default=None, help="覆盖 macro_manager result.json 路径")
-    parser.add_argument("--initial-capital", type=float, default=100000.0, help="初始本金（默认 100000）")
+    parser.add_argument("--initial-capital", type=float, default=500000.0, help="初始本金（默认 500000）")
     parser.add_argument(
         "--portfolio-holdings",
         default=None,

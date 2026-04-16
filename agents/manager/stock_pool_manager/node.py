@@ -115,11 +115,28 @@ def _analyze_one_stock(
     try:
         invoke_input: Dict[str, Any] = {"ts_code": ts_code, "trade_date": trade_date}
         result = stock_manager_graph.invoke(invoke_input)
+
+        # 检查 stock_manager 的持久化状态
+        cache_hit = result.get("stock_manager_cache_hit", False)
+        persisted = result.get("stock_manager_persisted", False)
+        result_path = result.get("stock_manager_result_path")
+
+        if cache_hit:
+            logger.debug("stock_manager 缓存命中: %s/%s", ts_code, trade_date)
+        elif persisted:
+            logger.debug("stock_manager 结果已持久化: %s", result_path)
+        else:
+            persist_reason = result.get("stock_manager_persist_reason", "unknown")
+            logger.warning("stock_manager 未持久化: %s/%s, 原因: %s", ts_code, trade_date, persist_reason)
+
         return {
             **base,
             "fundamental_reduce_result": result.get("fundamental_reduce_result"),
             "technical_analysis": result.get("technical_analysis"),
             "stock_manager_summary": result.get("stock_manager_summary"),
+            "stock_manager_cache_hit": cache_hit,
+            "stock_manager_persisted": persisted,
+            "stock_manager_result_path": result_path,
             "error": None,
         }
     except Exception as e:
@@ -129,6 +146,9 @@ def _analyze_one_stock(
             "fundamental_reduce_result": None,
             "technical_analysis": None,
             "stock_manager_summary": None,
+            "stock_manager_cache_hit": False,
+            "stock_manager_persisted": False,
+            "stock_manager_result_path": None,
             "error": str(e),
         }
 

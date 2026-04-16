@@ -4,11 +4,15 @@ Stock Fundamental Analyst（股票基本面分析师）- 节点实现
 当前版本聚焦两步：
 1. 基础数据获取：公司信息 + 估值快照
 2. LLM 解读：对公司基本信息做结构化摘要，供后续节点使用
+3. 持久化：将分析结果存储到本地 artifacts，支持缓存复用
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -17,6 +21,36 @@ from langchain_core.runnables import RunnableConfig
 from ....utils import date_offset, extract_json_text, to_serializable
 
 logger = logging.getLogger(__name__)
+
+# 存储路径：data/artifacts/analyst/stock_analyst/stock_fundamental_analyst/{ts_code}/{trade_date}/result.json
+_FUNDAMENTAL_ANALYST_ARTIFACT_ROOT = (
+    Path("data") / "artifacts" / "analyst" / "stock_analyst" / "stock_fundamental_analyst"
+)
+
+
+def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
+    """原子写入 JSON，避免中途中断留下半成品。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, path)
+
+
+def _load_json_file(path: Path) -> Any:
+    """读取 JSON 文件并返回解析结果。"""
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _build_fundamental_result_path(ts_code: str, trade_date: str) -> Path:
+    """构建基本面分析师结果文件路径。"""
+    return _FUNDAMENTAL_ANALYST_ARTIFACT_ROOT / ts_code / trade_date / "result.json"
+
+
+def _build_fundamental_manifest_path(ts_code: str, trade_date: str) -> Path:
+    """构建基本面分析师 manifest 文件路径。"""
+    return _FUNDAMENTAL_ANALYST_ARTIFACT_ROOT / ts_code / trade_date / "manifest.json"
 
 
 def _norm_date(s: Optional[str]) -> str:
@@ -1125,6 +1159,147 @@ def create_fundamental_reduce_node(llm):
     return fundamental_reduce_node
 
 
+def create_detect_fundamental_cache_node():
+    """检测本地是否已有基本面分析的缓存结果。"""
+
+    def detect_cache_node(
+        state: Dict[str, Any],
+        config: Optional[RunnableConfig] = None,
+    ) -> Dict[str, Any]:
+        _ = config
+        ts_code = (state.get("ts_code") or "").strip()
+        trade_date = str(state.get("trade_date") or "").replace("-", "")[:8]
+
+        if not ts_code or not trade_date:
+            return {
+                **state,
+                "fundamental_cache_hit": False,
+                "fundamental_cache_path": None,
+            }
+
+        result_path = _build_fundamental_result_path(ts_code, trade_date)
+        manifest_path = _build_fundamental_manifest_path(ts_code, trade_date)
+
+        if result_path.exists() and manifest_path.exists():
+            try:
+                cached_result = _load_json_file(result_path)
+                if cached_result and cached_result.get("fundamental_reduce_result"):
+                    logger.info("fundamental_analyst 缓存命中: %s/%s", ts_code, trade_date)
+                    return {
+                        **state,
+                        "fundamental_cache_hit": True,
+                        "fundamental_cache_path": result_path.as_posix(),
+                        # 恢复完整状态
+                        "stock_fundamental_meta": cached_result.get("stock_fundamental_meta"),
+                        "stock_company_info": cached_result.get("stock_company_info"),
+                        "stock_fundamental_daily": cached_result.get("stock_fundamental_daily"),
+                        "stock_income_data": cached_result.get("stock_income_data"),
+                        "stock_cashflow_data": cached_result.get("stock_cashflow_data"),
+                        "stock_balancesheet_data": cached_result.get("stock_balancesheet_data"),
+                        "stock_dividend_data": cached_result.get("stock_dividend_data"),
+                        "stock_fundamental_facts": cached_result.get("stock_fundamental_facts"),
+                        "fundamental_base_profile": cached_result.get("fundamental_base_profile"),
+                        "company_profile_text": cached_result.get("company_profile_text"),
+                        "company_basic_analysis": cached_result.get("company_basic_analysis"),
+                        "valuation_map_analysis": cached_result.get("valuation_map_analysis"),
+                        "income_map_analysis": cached_result.get("income_map_analysis"),
+                        "cashflow_map_analysis": cached_result.get("cashflow_map_analysis"),
+                        "balancesheet_map_analysis": cached_result.get("balancesheet_map_analysis"),
+                        "dividend_map_analysis": cached_result.get("dividend_map_analysis"),
+                        "fundamental_reduce_result": cached_result.get("fundamental_reduce_result"),
+                    }
+            except Exception as e:
+                logger.warning("读取 fundamental_analyst 缓存失败: %s", e)
+
+        return {
+            **state,
+            "fundamental_cache_hit": False,
+            "fundamental_cache_path": None,
+        }
+
+    return detect_cache_node
+
+
+def create_fundamental_persist_node():
+    """将基本面分析结果持久化到本地 artifacts。"""
+
+    def persist_node(
+        state: Dict[str, Any],
+        config: Optional[RunnableConfig] = None,
+    ) -> Dict[str, Any]:
+        _ = config
+        # 如果缓存已命中，不需要重复保存
+        if state.get("fundamental_cache_hit"):
+            return {
+                **state,
+                "fundamental_persisted": False,
+                "fundamental_persist_reason": "cache_hit",
+            }
+
+        ts_code = (state.get("ts_code") or "").strip()
+        trade_date = str(state.get("trade_date") or datetime.now().strftime("%Y%m%d")).replace("-", "")[:8]
+
+        if not ts_code:
+            return {**state, "fundamental_persisted": False, "fundamental_persist_reason": "missing_ts_code"}
+
+        result = state.get("fundamental_reduce_result")
+        if not result:
+            return {**state, "fundamental_persisted": False, "fundamental_persist_reason": "no_result"}
+
+        result_path = _build_fundamental_result_path(ts_code, trade_date)
+        manifest_path = _build_fundamental_manifest_path(ts_code, trade_date)
+
+        # 构建完整的结果对象
+        result_payload = {
+            "ts_code": ts_code,
+            "trade_date": trade_date,
+            "stock_fundamental_meta": state.get("stock_fundamental_meta"),
+            "stock_company_info": state.get("stock_company_info"),
+            "stock_fundamental_daily": state.get("stock_fundamental_daily"),
+            "stock_income_data": state.get("stock_income_data"),
+            "stock_cashflow_data": state.get("stock_cashflow_data"),
+            "stock_balancesheet_data": state.get("stock_balancesheet_data"),
+            "stock_dividend_data": state.get("stock_dividend_data"),
+            "stock_fundamental_facts": state.get("stock_fundamental_facts"),
+            "fundamental_base_profile": state.get("fundamental_base_profile"),
+            "company_profile_text": state.get("company_profile_text"),
+            "company_basic_analysis": state.get("company_basic_analysis"),
+            "valuation_map_analysis": state.get("valuation_map_analysis"),
+            "income_map_analysis": state.get("income_map_analysis"),
+            "cashflow_map_analysis": state.get("cashflow_map_analysis"),
+            "balancesheet_map_analysis": state.get("balancesheet_map_analysis"),
+            "dividend_map_analysis": state.get("dividend_map_analysis"),
+            "fundamental_reduce_result": result,
+        }
+
+        try:
+            _write_json_atomic(result_path, result_payload)
+            _write_json_atomic(
+                manifest_path,
+                {
+                    "artifact_type": "stock_fundamental_analyst_result",
+                    "module": "agents.analyst.stock_analyst.stock_fundamental_analyst",
+                    "ts_code": ts_code,
+                    "trade_date": trade_date,
+                    "created_at": datetime.now().astimezone().isoformat(),
+                    "status": "success",
+                    "result_path": result_path.as_posix(),
+                },
+            )
+            logger.info("fundamental_analyst 结果已持久化: %s", result_path)
+            return {
+                **state,
+                "fundamental_persisted": True,
+                "fundamental_result_path": result_path.as_posix(),
+                "fundamental_manifest_path": manifest_path.as_posix(),
+            }
+        except Exception as e:
+            logger.warning("fundamental_analyst 持久化失败: %s", e)
+            return {**state, "fundamental_persisted": False, "fundamental_persist_error": str(e)}
+
+    return persist_node
+
+
 __all__ = [
     "create_stock_fundamental_fetch_node",
     "create_stock_fundamental_analysis_node",
@@ -1135,4 +1310,6 @@ __all__ = [
     "create_balancesheet_map_node",
     "create_dividend_map_node",
     "create_fundamental_reduce_node",
+    "create_detect_fundamental_cache_node",
+    "create_fundamental_persist_node",
 ]

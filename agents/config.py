@@ -21,7 +21,7 @@ class LLMConfig:
     
     def __init__(self, 
                  provider: str = 'siliconflow',
-                 model: str = 'Pro/MiniMaxAI/MiniMax-M2.5',
+                 model: str = 'Pro/deepseek-ai/DeepSeek-V3.2',
                  base_url: str = None,
                  temperature: float = 0.0,
                  max_retries: int = 3,

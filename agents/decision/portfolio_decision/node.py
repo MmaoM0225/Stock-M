@@ -203,9 +203,9 @@ def create_load_upstream_artifacts_node():
                 portfolio_table = _extract_portfolio_table(_load_json_file(portfolio_book_path))
             except Exception as e:
                 warnings.append(f"读取资产组合表失败: {portfolio_book_path.as_posix()} ({e})")
-        initial_capital = _to_float(state.get("initial_capital"), 100000.0)
+        initial_capital = _to_float(state.get("initial_capital"), 500000.0)
         if initial_capital <= 0:
-            initial_capital = 100000.0
+            initial_capital = 500000.0
         return {
             **state,
             "trade_date": trade_date,
@@ -238,7 +238,7 @@ def create_build_decision_context_node():
         cash_row = next((r for r in portfolio_table if str(r.get("资产名称")) == "待投资现金"), None)
         holding_rows = [r for r in portfolio_table if str(r.get("资产名称")) != "待投资现金"]
 
-        total_capital = _to_float(state.get("initial_capital"), 100000.0)
+        total_capital = _to_float(state.get("initial_capital"), 500000.0)
         if portfolio_table:
             current_total = sum(_to_float(r.get("市值 (元)"), 0.0) for r in portfolio_table)
             if current_total > 0:
@@ -393,14 +393,37 @@ def _apply_operations_to_table(
     initial_capital: float,
     old_table: List[Dict[str, Any]],
     operations: List[Dict[str, Any]],
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], float]:
     old_map: Dict[str, Dict[str, Any]] = {}
+    previous_cash = 0.0
     for row in old_table:
         if str(row.get("资产名称")) == "待投资现金":
+            previous_cash = _to_float(row.get("市值 (元)"), 0.0)
             continue
         key = str(row.get("ts_code") or row.get("资产名称") or "")
         if key:
             old_map[key] = row
+
+    # 计算上日总资产：持仓按当日开盘价重新估值 + 现金
+    previous_holding_value = 0.0
+    for row in old_table:
+        if str(row.get("资产名称")) == "待投资现金":
+            continue
+        ts_code = str(row.get("ts_code") or "").strip()
+        old_shares = _to_int(row.get("持仓股数"), 0)
+        if ts_code and old_shares > 0:
+            open_price = _fetch_open_price(ts_code, trade_date)
+            if open_price is not None and open_price > 0:
+                previous_holding_value += old_shares * open_price
+            else:
+                # 无法获取开盘价时，沿用旧市值
+                previous_holding_value += _to_float(row.get("市值 (元)"), 0.0)
+        else:
+            previous_holding_value += _to_float(row.get("市值 (元)"), 0.0)
+
+    total_capital = previous_holding_value + previous_cash
+    if total_capital <= 0:
+        total_capital = initial_capital
 
     op_reason_rows: List[Dict[str, Any]] = []
     result_rows: List[Dict[str, Any]] = []
@@ -449,36 +472,60 @@ def _apply_operations_to_table(
         if operation == "清仓":
             new_w = 0.0
         open_price = _fetch_open_price(ts_code, trade_date) if ts_code else None
-        target_budget = round(initial_capital * new_w, 2)
+        target_budget = round(total_capital * new_w, 2)
         amount = 0.0
         shares: Any = 0
         actual_w = 0.0
         cost_price: Optional[float] = None
 
         # A股按整手（100股）计算可买股数；再用可成交总价回算真实仓位。
+        # 逻辑：四舍五入到最接近目标金额的整手数，让实际成交金额更接近目标金额
         if operation != "清仓" and open_price is not None and open_price > 0 and ts_code:
             lot_size = 100
-            raw_shares = int(target_budget // open_price)
-            if raw_shares > 0:
-                tradable_shares = (raw_shares // lot_size) * lot_size
-            else:
-                tradable_shares = 0
-            shares = tradable_shares
-            amount = round(tradable_shares * open_price, 2)
-            actual_w = (amount / initial_capital) if initial_capital > 0 else 0.0
-            # 成本价处理：
-            # 建仓：成本=开盘价；持有：沿用旧成本；
-            # 加仓：按旧仓+新增仓做加权成本；减仓：剩余仓位成本沿用旧成本。
-            if old_shares <= 0 or operation == "建仓":
-                cost_price = open_price
-            elif operation == "持有":
+
+            if operation == "持有":
+                # 持有：保持原有股数，只按当日开盘价重新估值
+                shares = old_shares if old_shares > 0 else 0
+                amount = round(shares * open_price, 2) if shares > 0 else 0.0
+                actual_w = (amount / total_capital) if total_capital > 0 else 0.0
                 cost_price = old_cost if old_cost > 0 else open_price
-            elif operation == "加仓" and shares > old_shares:
-                add_shares = shares - old_shares
-                base_cost = old_cost if old_cost > 0 else open_price
-                cost_price = ((old_shares * base_cost) + (add_shares * open_price)) / max(shares, 1)
             else:
-                cost_price = old_cost if old_cost > 0 else open_price
+                # 建仓/加仓/减仓：根据目标金额计算股数
+                # 计算目标金额能买多少手（向上取整，确保买够目标仓位）
+                target_lots = target_budget / (open_price * lot_size)
+                # 向上取整到整手数（ceiling），确保买够
+                lots = int(target_lots) if target_lots == int(target_lots) else int(target_lots) + 1
+                # 建仓/加仓时：确保至少1手（如果目标金额够买至少1手）
+                if lots <= 0 and target_budget >= open_price * lot_size:
+                    lots = 1
+                # 减仓时：如果目标仓位为0或无法计算，清仓
+                if operation == "减仓" and lots <= 0:
+                    lots = 0
+                tradable_shares = lots * lot_size
+
+                # 处理减仓：如果新计算股数小于原持仓，则为减仓
+                if operation == "减仓" and old_shares > 0 and tradable_shares < old_shares:
+                    shares = tradable_shares
+                    amount = round(shares * open_price, 2)
+                    actual_w = (amount / total_capital) if total_capital > 0 else 0.0
+                    cost_price = old_cost if old_cost > 0 else open_price  # 减仓后成本价不变
+                elif operation == "加仓" and old_shares > 0 and tradable_shares > old_shares:
+                    # 加仓：按旧仓+新增仓做加权成本
+                    shares = tradable_shares
+                    amount = round(shares * open_price, 2)
+                    actual_w = (amount / total_capital) if total_capital > 0 else 0.0
+                    add_shares = shares - old_shares
+                    base_cost = old_cost if old_cost > 0 else open_price
+                    cost_price = ((old_shares * base_cost) + (add_shares * open_price)) / max(shares, 1)
+                else:
+                    # 建仓或其他情况
+                    shares = tradable_shares
+                    amount = round(tradable_shares * open_price, 2)
+                    actual_w = (amount / total_capital) if total_capital > 0 else 0.0
+                    if old_shares <= 0 or operation == "建仓":
+                        cost_price = open_price
+                    else:
+                        cost_price = old_cost if old_cost > 0 else open_price
         else:
             shares = 0 if ts_code else "-"
             amount = 0.0
@@ -544,20 +591,19 @@ def _apply_operations_to_table(
                 "实际成交金额(元)": amount,
                 "成交股数": shares,
                 "成本价": round(cost_price, 4) if isinstance(cost_price, (int, float)) and cost_price > 0 else None,
-                "收益计算口径": "持仓盈亏=(开盘价-成本价)*持仓股数；收益率=开盘价/成本价-1",
                 "操作原因": op.get("reason"),
             }
         )
 
-    cash_amt = round(max(initial_capital - invested, 0.0), 2)
+    cash_amt = round(max(total_capital - invested, 0.0), 2)
     result_rows.append(
         {
             "排名": "-",
             "资产名称": "待投资现金",
             "ts_code": None,
             "市值 (元)": cash_amt,
-            "仓位": _fmt_pct(cash_amt / initial_capital if initial_capital > 0 else 0.0),
-            "较上期仓位变化": "0.00%",
+            "仓位": _fmt_pct(cash_amt / total_capital if total_capital > 0 else 0.0),
+            "较上期仓位变化": _fmt_pct((cash_amt - previous_cash) / total_capital if total_capital > 0 else 0.0),
             "总收益 (%)": "0.00%",
             "总盈亏 (元)": 0.0,
             "行业/板块": "现金",
@@ -569,14 +615,14 @@ def _apply_operations_to_table(
             "开盘价": None,
         }
     )
-    return result_rows, op_reason_rows
+    return result_rows, op_reason_rows, round(total_capital, 2)
 
 
 def create_llm_make_decision_node(llm: Any, stock_manager_graph: Any = None):
     def llm_make_decision_node(state: Dict[str, Any], config: Optional[RunnableConfig] = None) -> Dict[str, Any]:
         context = state.get("decision_context") or {}
         trade_date = _normalize_trade_date(context.get("meta", {}).get("trade_date") or state.get("trade_date"))
-        initial_capital = _to_float(context.get("meta", {}).get("initial_capital"), 100000.0)
+        initial_capital = _to_float(context.get("meta", {}).get("initial_capital"), 500000.0)
 
         stock_pool_result = state.get("stock_pool_manager_result") or {}
         manager_map = _collect_cached_manager_map(stock_pool_result)
@@ -602,6 +648,7 @@ def create_llm_make_decision_node(llm: Any, stock_manager_graph: Any = None):
                 "decision_summary": "LLM调用失败：未提供LLM实例。",
                 "meta": {
                     "initial_capital": initial_capital,
+                    "total_capital": initial_capital,
                     "source_portfolio_path": state.get("portfolio_book_source_path"),
                     "warnings": [
                         *(state.get("decision_warnings") or []),
@@ -617,7 +664,9 @@ def create_llm_make_decision_node(llm: Any, stock_manager_graph: Any = None):
 1) 操作仅允许：建仓/加仓/减仓/清仓/持有；
 2) 若是首次建仓（is_first_build=true），优先给建仓；
 3) 每条操作必须给出原因；
-4) 输出严格 JSON。"""
+4) 输出严格JSON；
+5) 必须参考 macro_hint.target_position 给出的仓位区间建议（如"20%-40%"），将总仓位控制在建议区间内；
+6) target_weight_pct 为单个资产的目标仓位比例（0-1之间的小数，如0.12表示12%）。"""
             human_msg = """输入：
 {payload}
 
@@ -628,7 +677,12 @@ def create_llm_make_decision_node(llm: Any, stock_manager_graph: Any = None):
   ],
   "decision_summary":""
 }}
-"""
+
+注意：
+- 请严格遵循 macro_hint.target_position 的仓位区间建议
+- 所有资产的 target_weight_pct 总和应在建议区间内
+- 首次建仓时分散配置，单只仓位建议 5%-15%
+- 调仓时优先保留基本面优秀的持仓，减持高风险资产"""
             prompt = ChatPromptTemplate.from_messages([("system", system_msg), ("human", human_msg)])
             chain = prompt | llm
             try:
@@ -650,6 +704,7 @@ def create_llm_make_decision_node(llm: Any, stock_manager_graph: Any = None):
                     "decision_summary": f"LLM调用失败：{e}",
                     "meta": {
                         "initial_capital": initial_capital,
+                        "total_capital": initial_capital,
                         "source_portfolio_path": state.get("portfolio_book_source_path"),
                         "warnings": [
                             *(state.get("decision_warnings") or []),
@@ -660,7 +715,7 @@ def create_llm_make_decision_node(llm: Any, stock_manager_graph: Any = None):
                 }
                 return {**state, "decision_result": decision_result}
 
-        new_table, reason_table = _apply_operations_to_table(
+        new_table, reason_table, total_capital = _apply_operations_to_table(
             trade_date=trade_date,
             initial_capital=initial_capital,
             old_table=context.get("portfolio_table") or [],
@@ -673,6 +728,7 @@ def create_llm_make_decision_node(llm: Any, stock_manager_graph: Any = None):
             "decision_summary": summary,
             "meta": {
                 "initial_capital": initial_capital,
+                "total_capital": total_capital,
                 "source_portfolio_path": state.get("portfolio_book_source_path"),
                 "warnings": state.get("decision_warnings") or [],
                 "generated_at": datetime.now().astimezone().isoformat(),

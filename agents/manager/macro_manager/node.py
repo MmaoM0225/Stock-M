@@ -269,7 +269,7 @@ JSON 结构（focus_industry_sectors / focus_concept_sectors 必须从下方对�
 {{
   "market_regime": "从当日 liquidity/macro_economy 等综合得出的状态",
   "market_direction": "neutral | bullish | bearish",
-  "target_position": "low | medium | high",
+  "target_position": "建议仓位区间，如 20%-40%、50%-70%、80%-100% 等具体百分比范围",
   "focus_industry_sectors": ["从 industry_list 中选取的行业名"],
   "focus_concept_sectors": ["从 ths_concept_list 中选取的概念名"],
   "avoid_sectors": ["从当日数据提炼的规避板块"],
