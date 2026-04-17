@@ -88,6 +88,7 @@ def create_macro_economist_fetch_node(market_fetcher=None):
                 logger.warning("fetch_gdp 失败: %s", e)
 
         return {
+            "trade_date": trade_date,
             "macro_economist_lpr_data": to_serializable(lpr_data),
             "macro_economist_cpi_data": to_serializable(cpi_data),
             "macro_economist_sf_data": to_serializable(sf_data),
@@ -143,8 +144,11 @@ def create_macro_economist_analysis_node(llm=None):
         gdp = state.get("macro_economist_gdp_data")
         m2 = state.get("macro_economist_m2_data")
 
+        trade_date = state.get("trade_date") or datetime.now().strftime("%Y%m%d")
+
         if not lpr and not cpi and not sf and not pmi and not gdp and not m2:
             return {
+                "trade_date": trade_date,
                 "macro_economist_analysis": {
                     **_MACRO_ECONOMIST_DEFAULT,
                     "liquidity_summary": "数据缺失",
@@ -180,6 +184,7 @@ def create_macro_economist_analysis_node(llm=None):
 
         if llm is None:
             return {
+                "trade_date": trade_date,
                 "macro_economist_analysis": {
                     **_MACRO_ECONOMIST_DEFAULT,
                     "liquidity_summary": "; ".join(data_summary),
@@ -272,10 +277,11 @@ M2（月度）:
             # 补全可能缺失的字段
             for k, v in _MACRO_ECONOMIST_DEFAULT.items():
                 data.setdefault(k, v)
-            return {"macro_economist_analysis": data}
+            return {"trade_date": trade_date, "macro_economist_analysis": data}
         except Exception as e:
             logger.warning("macro_economist_analysis LLM 失败: %s", e)
             return {
+                "trade_date": trade_date,
                 "macro_economist_analysis": {
                     **_MACRO_ECONOMIST_DEFAULT,
                     "liquidity_summary": "; ".join(data_summary),

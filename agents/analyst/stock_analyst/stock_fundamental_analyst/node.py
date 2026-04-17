@@ -1141,8 +1141,21 @@ def create_fundamental_reduce_node(llm):
             overall_score = max(0.0, min(100.0, overall_score))
         except (TypeError, ValueError):
             overall_score = None
+
+        # 判断分析是否成功：至少有一些关键数据
+        meta = state.get("stock_fundamental_meta") or {}
+        has_data = (
+            meta.get("company_info_ready")
+            or meta.get("valuation_ready")
+            or meta.get("income_ready")
+            or meta.get("cashflow_ready")
+            or meta.get("balancesheet_ready")
+        )
+        success = has_data and overall_score is not None and overall_score > 0
+
         out = {
             "ts_code": data.get("ts_code") or ts_code,
+            "success": success,
             "overall_score": overall_score,
             "rating_label": data.get("rating_label") or "数据不足",
             "confidence": data.get("confidence") or "低",
@@ -1160,7 +1173,7 @@ def create_fundamental_reduce_node(llm):
 
 
 def create_detect_fundamental_cache_node():
-    """检测本地是否已有基本面分析的缓存结果。"""
+    """检测本地是否已有基本面分析的缓存结果。如果之前分析失败，则跳过缓存重新分析。"""
 
     def detect_cache_node(
         state: Dict[str, Any],
@@ -1183,31 +1196,50 @@ def create_detect_fundamental_cache_node():
         if result_path.exists() and manifest_path.exists():
             try:
                 cached_result = _load_json_file(result_path)
-                if cached_result and cached_result.get("fundamental_reduce_result"):
-                    logger.info("fundamental_analyst 缓存命中: %s/%s", ts_code, trade_date)
+                reduce_result = cached_result.get("fundamental_reduce_result") if cached_result else None
+
+                # 检查是否有有效结果
+                if not reduce_result:
+                    logger.info("fundamental_analyst 缓存无效（无reduce结果）: %s/%s", ts_code, trade_date)
                     return {
                         **state,
-                        "fundamental_cache_hit": True,
-                        "fundamental_cache_path": result_path.as_posix(),
-                        # 恢复完整状态
-                        "stock_fundamental_meta": cached_result.get("stock_fundamental_meta"),
-                        "stock_company_info": cached_result.get("stock_company_info"),
-                        "stock_fundamental_daily": cached_result.get("stock_fundamental_daily"),
-                        "stock_income_data": cached_result.get("stock_income_data"),
-                        "stock_cashflow_data": cached_result.get("stock_cashflow_data"),
-                        "stock_balancesheet_data": cached_result.get("stock_balancesheet_data"),
-                        "stock_dividend_data": cached_result.get("stock_dividend_data"),
-                        "stock_fundamental_facts": cached_result.get("stock_fundamental_facts"),
-                        "fundamental_base_profile": cached_result.get("fundamental_base_profile"),
-                        "company_profile_text": cached_result.get("company_profile_text"),
-                        "company_basic_analysis": cached_result.get("company_basic_analysis"),
-                        "valuation_map_analysis": cached_result.get("valuation_map_analysis"),
-                        "income_map_analysis": cached_result.get("income_map_analysis"),
-                        "cashflow_map_analysis": cached_result.get("cashflow_map_analysis"),
-                        "balancesheet_map_analysis": cached_result.get("balancesheet_map_analysis"),
-                        "dividend_map_analysis": cached_result.get("dividend_map_analysis"),
-                        "fundamental_reduce_result": cached_result.get("fundamental_reduce_result"),
+                        "fundamental_cache_hit": False,
+                        "fundamental_cache_path": None,
                     }
+
+                # 检查之前是否分析失败
+                if not reduce_result.get("success", True):
+                    logger.info("fundamental_analyst 缓存标记为失败，重新分析: %s/%s", ts_code, trade_date)
+                    return {
+                        **state,
+                        "fundamental_cache_hit": False,
+                        "fundamental_cache_path": None,
+                    }
+
+                logger.info("fundamental_analyst 缓存命中: %s/%s", ts_code, trade_date)
+                return {
+                    **state,
+                    "fundamental_cache_hit": True,
+                    "fundamental_cache_path": result_path.as_posix(),
+                    # 恢复完整状态
+                    "stock_fundamental_meta": cached_result.get("stock_fundamental_meta"),
+                    "stock_company_info": cached_result.get("stock_company_info"),
+                    "stock_fundamental_daily": cached_result.get("stock_fundamental_daily"),
+                    "stock_income_data": cached_result.get("stock_income_data"),
+                    "stock_cashflow_data": cached_result.get("stock_cashflow_data"),
+                    "stock_balancesheet_data": cached_result.get("stock_balancesheet_data"),
+                    "stock_dividend_data": cached_result.get("stock_dividend_data"),
+                    "stock_fundamental_facts": cached_result.get("stock_fundamental_facts"),
+                    "fundamental_base_profile": cached_result.get("fundamental_base_profile"),
+                    "company_profile_text": cached_result.get("company_profile_text"),
+                    "company_basic_analysis": cached_result.get("company_basic_analysis"),
+                    "valuation_map_analysis": cached_result.get("valuation_map_analysis"),
+                    "income_map_analysis": cached_result.get("income_map_analysis"),
+                    "cashflow_map_analysis": cached_result.get("cashflow_map_analysis"),
+                    "balancesheet_map_analysis": cached_result.get("balancesheet_map_analysis"),
+                    "dividend_map_analysis": cached_result.get("dividend_map_analysis"),
+                    "fundamental_reduce_result": reduce_result,
+                }
             except Exception as e:
                 logger.warning("读取 fundamental_analyst 缓存失败: %s", e)
 

@@ -102,9 +102,6 @@ def main() -> None:
     art = result.get("decision_artifact_path")
     if art:
         print(f"\n已写入: {art}")
-    book = result.get("portfolio_book_artifact_path")
-    if book:
-        print(f"组合表已写入: {book}")
 
 
 if __name__ == "__main__":

@@ -62,7 +62,7 @@ def main():
         "trade_date": trade_date,
         "min_market_cap": 80e8,  # 统一底线约束；具体板块可被模板细化
         "exclude_st": True,
-        "max_stocks": 20,
+        "max_stocks": 12,
     }
 
 

@@ -1,7 +1,7 @@
 """
 2025年实盘模拟运行脚本
 
-每10个交易日运行一次完整的投资决策流程（有严格的依赖顺序）：
+每7个交易日运行一次完整的投资决策流程（有严格的依赖顺序）：
 
 依赖链：
                         Macro Manager
@@ -26,7 +26,8 @@
 
 运行方式:
     python live_trading_2025.py
-    python live_trading_2025.py --start-date 20250101 --end-date 20251231 --interval 10
+    python live_trading_2025.py --single-date 20250102
+    python live_trading_2025.py --start-date 20250101 --end-date 20251231 --interval 7
     python live_trading_2025.py --dry-run  # 仅预览交易日历，不实际运行
 """
 
@@ -65,7 +66,7 @@ logging.basicConfig(
     handlers=[
         logging.StreamHandler(),
         logging.FileHandler(
-            project_root / "data" / "artifacts" / "decision_2025_10d.log",
+            project_root / "data" / "artifacts" / "2025_7d_for_once.log",
             encoding="utf-8",
         ),
     ],
@@ -77,15 +78,14 @@ SECTOR_MANAGER_ROOT = Path("data/artifacts/manager/sector_manager")
 STOCK_POOL_MANAGER_ROOT = Path("data/artifacts/manager/stock_pool_manager")
 MACRO_MANAGER_ROOT = Path("data/artifacts/manager/macro_manager")
 STOCK_SCREENER_ROOT = Path("data/artifacts/analyst/stock_analyst/stock_screener")
-PORTFOLIO_DECISION_ROOT = Path("data/artifacts/decision_2025_10d/portfolio_decision")
-PORTFOLIO_BOOK_ROOT = Path("data/artifacts/decision_2025_10d/portfolio_book")
+PORTFOLIO_DECISION_ROOT = Path("data/artifacts/decision/2025_7d_for_once/portfolio")
 
 DEFAULT_INITIAL_CAPITAL = 500000.0
 
 
 def load_portfolio_book(trade_date: str) -> Optional[List[Dict[str, Any]]]:
     """加载指定日期的资产组合持仓数据"""
-    book_path = PORTFOLIO_BOOK_ROOT / trade_date / "result.json"
+    book_path = PORTFOLIO_DECISION_ROOT / trade_date / "result.json"
     if not book_path.exists():
         logger.info(f"未找到 {trade_date} 的持仓记录，视为首次建仓")
         return None
@@ -117,10 +117,10 @@ def get_latest_portfolio_book_before(
 
 
 def get_available_portfolio_dates() -> List[str]:
-    """获取所有已有的portfolio_book日期列表"""
+    """获取所有已有的portfolio_decision日期列表"""
     dates = []
-    if PORTFOLIO_BOOK_ROOT.exists():
-        for date_dir in PORTFOLIO_BOOK_ROOT.iterdir():
+    if PORTFOLIO_DECISION_ROOT.exists():
+        for date_dir in PORTFOLIO_DECISION_ROOT.iterdir():
             if date_dir.is_dir() and date_dir.name.isdigit() and len(date_dir.name) == 8:
                 result_file = date_dir / "result.json"
                 if result_file.exists():
@@ -177,7 +177,7 @@ def run_stock_screener(trade_date: str) -> Dict[str, Any]:
         "trade_date": trade_date,
         "min_market_cap": 80e8,  # 最小市值80亿
         "exclude_st": True,       # 排除ST股票
-        "max_stocks": 20,         # 最多返回20只
+        "max_stocks": 12,         # 最多返回12只
     }
     
     start = time.perf_counter()
@@ -199,22 +199,24 @@ def run_portfolio_decision(
 ) -> Dict[str, Any]:
     """运行组合决策"""
     logger.info(f"[{trade_date}] 开始运行 Portfolio Decision...")
-    
+
     # 创建stock_manager子图（用于补跑缺失的股票分析）
     from agents.manager.stock_manager.graph import create_stock_manager_graph
     stock_manager_graph = create_stock_manager_graph(llm=llm)
-    
+
     graph = create_portfolio_decision_graph(llm=llm)
-    
+
     invoke_input = {
         "trade_date": trade_date,
         "initial_capital": initial_capital,
+        # 传入自定义存储路径
+        "portfolio_decision_root": str(PORTFOLIO_DECISION_ROOT),
     }
-    
+
     if portfolio_holdings:
         invoke_input["portfolio_holdings"] = portfolio_holdings
         logger.info(f"[{trade_date}] 传入持仓: {len(portfolio_holdings)} 个资产")
-    
+
     start = time.perf_counter()
     result = graph.invoke(invoke_input)
     elapsed = time.perf_counter() - start
@@ -230,21 +232,18 @@ def run_portfolio_decision(
     
     # 记录 artifact 路径
     art = result.get("decision_artifact_path")
-    book = result.get("portfolio_book_artifact_path")
     if art:
         logger.info(f"[{trade_date}] 决策结果已保存: {art}")
-    if book:
-        logger.info(f"[{trade_date}] 组合表已保存: {book}")
     
     return result
 
 
-def get_trading_days_2025(interval: int = 5, exchange: str = "SSE") -> List[str]:
+def get_trading_days_2025(interval: int = 7, exchange: str = "SSE") -> List[str]:
     """
     获取2025年的交易日列表，按指定间隔筛选
     
     Args:
-        interval: 运行间隔（交易日数），默认5天
+        interval: 运行间隔（交易日数），默认7天
         exchange: 交易所代码，默认SSE（上交所）
     
     Returns:
@@ -362,7 +361,7 @@ def run_single_trading_day(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="2025年实盘模拟 - 每10个交易日运行一次投资决策"
+        description="2025年实盘模拟 - 每7个交易日运行一次投资决策"
     )
     parser.add_argument(
         "--start-date",
@@ -377,8 +376,8 @@ def main():
     parser.add_argument(
         "--interval",
         type=int,
-        default=10,
-        help="运行间隔（交易日数），默认10天",
+        default=7,
+        help="运行间隔（交易日数），默认7天",
     )
     parser.add_argument(
         "--exchange",

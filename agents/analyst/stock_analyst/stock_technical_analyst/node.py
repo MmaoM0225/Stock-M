@@ -269,8 +269,13 @@ def create_stock_technical_insight_node(llm):
         except Exception:
             technical_score = None
 
+        # 判断分析是否成功：有K线数据且LLM返回有效评分
+        kline_ready = meta.get("kline_ready", False)
+        success = kline_ready and technical_score is not None
+
         out = {
             "ts_code": data.get("ts_code") or facts.get("ts_code"),
+            "success": success,
             "technical_score": technical_score,
             "trend_signal": data.get("trend_signal") or "unknown",
             "trend_strength": data.get("trend_strength") or "unknown",
@@ -287,7 +292,7 @@ def create_stock_technical_insight_node(llm):
 
 
 def create_detect_technical_cache_node():
-    """检测本地是否已有技术面分析的缓存结果。"""
+    """检测本地是否已有技术面分析的缓存结果。如果之前分析失败，则跳过缓存重新分析。"""
 
     def detect_cache_node(
         state: Dict[str, Any],
@@ -310,18 +315,37 @@ def create_detect_technical_cache_node():
         if result_path.exists() and manifest_path.exists():
             try:
                 cached_result = _load_json_file(result_path)
-                if cached_result and cached_result.get("technical_analysis"):
-                    logger.info("technical_analyst 缓存命中: %s/%s", ts_code, trade_date)
+                tech_analysis = cached_result.get("technical_analysis") if cached_result else None
+
+                # 检查是否有有效结果
+                if not tech_analysis:
+                    logger.info("technical_analyst 缓存无效（无分析结果）: %s/%s", ts_code, trade_date)
                     return {
                         **state,
-                        "technical_cache_hit": True,
-                        "technical_cache_path": result_path.as_posix(),
-                        # 恢复完整状态
-                        "stock_technical_meta": cached_result.get("stock_technical_meta"),
-                        "stock_kline_data": cached_result.get("stock_kline_data"),
-                        "stock_technical_facts": cached_result.get("stock_technical_facts"),
-                        "technical_analysis": cached_result.get("technical_analysis"),
+                        "technical_cache_hit": False,
+                        "technical_cache_path": None,
                     }
+
+                # 检查之前是否分析失败
+                if not tech_analysis.get("success", True):
+                    logger.info("technical_analyst 缓存标记为失败，重新分析: %s/%s", ts_code, trade_date)
+                    return {
+                        **state,
+                        "technical_cache_hit": False,
+                        "technical_cache_path": None,
+                    }
+
+                logger.info("technical_analyst 缓存命中: %s/%s", ts_code, trade_date)
+                return {
+                    **state,
+                    "technical_cache_hit": True,
+                    "technical_cache_path": result_path.as_posix(),
+                    # 恢复完整状态
+                    "stock_technical_meta": cached_result.get("stock_technical_meta"),
+                    "stock_kline_data": cached_result.get("stock_kline_data"),
+                    "stock_technical_facts": cached_result.get("stock_technical_facts"),
+                    "technical_analysis": tech_analysis,
+                }
             except Exception as e:
                 logger.warning("读取 technical_analyst 缓存失败: %s", e)
 

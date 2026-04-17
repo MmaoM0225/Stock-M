@@ -57,17 +57,48 @@ def _invoke_one(
     graph: Any,
     output_key: str,
     invoke_input: Dict[str, Any],
+    max_retries: int = 1,
 ) -> Tuple[str, str, Any]:
-    try:
-        result = graph.invoke(invoke_input)
-        return name, output_key, result.get(output_key, result)
-    except Exception as e:
-        logger.exception("stock 子图 %s 执行失败: %s", name, e)
-        return name, output_key, {"error": str(e)}
+    """执行子图，支持失败重试"""
+    last_error = None
+    for attempt in range(max_retries + 1):
+        try:
+            result = graph.invoke(invoke_input)
+            value = result.get(output_key, result)
+            # 检查结果是否有效（非空且不是错误对象）
+            if value is None:
+                logger.warning("stock 子图 %s 返回 %s 为 None (attempt %d/%d)", name, output_key, attempt + 1, max_retries + 1)
+                last_error = f"{output_key} is None"
+                if attempt < max_retries:
+                    import time
+                    time.sleep(0.5)  # 短暂延迟后重试
+                    continue
+            elif isinstance(value, dict) and value.get("error"):
+                logger.warning("stock 子图 %s 返回错误: %s (attempt %d/%d)", name, value.get("error"), attempt + 1, max_retries + 1)
+                last_error = value.get("error")
+                if attempt < max_retries:
+                    import time
+                    time.sleep(0.5)
+                    continue
+            else:
+                # 成功
+                if attempt > 0:
+                    logger.info("stock 子图 %s 在第 %d 次尝试后成功", name, attempt + 1)
+                return name, output_key, value
+        except Exception as e:
+            logger.exception("stock 子图 %s 执行失败 (attempt %d/%d): %s", name, attempt + 1, max_retries + 1, e)
+            last_error = str(e)
+            if attempt < max_retries:
+                import time
+                time.sleep(0.5)
+                continue
+
+    # 所有尝试都失败
+    return name, output_key, {"error": last_error or "max retries exceeded"}
 
 
 def create_detect_stock_manager_cache_node():
-    """检测本地是否已有 stock_manager 的缓存结果。"""
+    """检测本地是否已有 stock_manager 的缓存结果。如果之前分析失败，则跳过缓存重新分析。"""
 
     def detect_cache_node(
         state: Dict[str, Any],
@@ -90,16 +121,33 @@ def create_detect_stock_manager_cache_node():
         if result_path.exists() and manifest_path.exists():
             try:
                 cached_result = _load_json_file(result_path)
-                if cached_result and cached_result.get("stock_manager_summary"):
-                    logger.info("stock_manager 缓存命中: %s/%s", ts_code, trade_date)
+                summary = cached_result.get("stock_manager_summary") if cached_result else None
+
+                # 检查是否有有效结果
+                if not summary:
+                    logger.info("stock_manager 缓存无效（无summary）: %s/%s", ts_code, trade_date)
                     return {
                         **state,
-                        "stock_manager_cache_hit": True,
-                        "stock_manager_cache_path": result_path.as_posix(),
-                        "fundamental_reduce_result": cached_result.get("fundamental_reduce_result"),
-                        "technical_analysis": cached_result.get("technical_analysis"),
-                        "stock_manager_summary": cached_result.get("stock_manager_summary"),
+                        "stock_manager_cache_hit": False,
+                        "stock_manager_cache_path": None,
                     }
+
+                # 检查之前是否分析失败
+                if not summary.get("success", True):
+                    logger.info("stock_manager 缓存标记为失败，重新分析: %s/%s", ts_code, trade_date)
+                    return {
+                        **state,
+                        "stock_manager_cache_hit": False,
+                        "stock_manager_cache_path": None,
+                    }
+
+                logger.info("stock_manager 缓存命中: %s/%s", ts_code, trade_date)
+                return {
+                    **state,
+                    "stock_manager_cache_hit": True,
+                    "stock_manager_cache_path": result_path.as_posix(),
+                    "stock_manager_summary": summary,
+                }
             except Exception as e:
                 logger.warning("读取 stock_manager 缓存失败: %s", e)
 
@@ -231,11 +279,18 @@ def create_stock_summary_node(llm):
             else:
                 action_signal = "sell"
                 signal_reason = "综合评分偏低，风险收益比不占优。"
+            # 判断分析是否成功：基本面或技术面至少有一个成功且有有效评分
+            success = (
+                (fa.get("success") and fs is not None)
+                or (ta.get("success") and ts is not None)
+            )
+
             return {
                 "ts_code": ts_code,
                 "trade_date": state.get("trade_date"),
                 "stock_manager_summary": {
                     **_STOCK_MANAGER_SUMMARY_DEFAULT,
+                    "success": success,
                     "overall_score": score,
                     "component_scores": {"fundamental": fs, "technical": ts},
                     "action_signal": action_signal,
@@ -288,8 +343,22 @@ def create_stock_summary_node(llm):
             score = None
 
         component = data.get("component_scores") or {}
+
+        # 判断分析是否成功：综合评分有效且至少有一个子分析成功
+        # 注意：fa 可能是 None 或空字典，需要检查
+        fundamental_success = isinstance(fa, dict) and fa.get("success", False)
+        technical_success = isinstance(ta, dict) and ta.get("success", False)
+        # 如果基本面或技术面分析完全缺失（null/None），标记为失败
+        fundamental_exists = fa is not None and isinstance(fa, dict) and "success" in fa
+        technical_exists = ta is not None and isinstance(ta, dict) and "success" in ta
+        success = score is not None and (fundamental_success or technical_success)
+        # 如果两个分析都缺失，强制标记为失败
+        if not fundamental_exists and not technical_exists:
+            success = False
+
         out = {
             "ts_code": data.get("ts_code") or ts_code,
+            "success": success,
             "overall_score": score,
             "confidence": data.get("confidence") or "低",
             "selection_reason": data.get("selection_reason") or "",
@@ -350,12 +419,10 @@ def create_persist_stock_manager_node():
 
         logger.debug("stock_manager persist: 准备写入 %s", result_path)
 
-        # 构建完整的结果对象
+        # 构建结果对象（仅保留最终汇总，中间结果已保存在各自 analyst 文件中）
         result_payload = {
             "ts_code": ts_code,
             "trade_date": trade_date,
-            "fundamental_reduce_result": state.get("fundamental_reduce_result"),
-            "technical_analysis": state.get("technical_analysis"),
             "stock_manager_summary": summary,
         }
 

@@ -37,8 +37,17 @@ logger = logging.getLogger(__name__)
 _SECTOR_MANAGER_ARTIFACT_ROOT = Path("data") / "artifacts" / "manager" / "sector_manager"
 _STOCK_POOL_MANAGER_ARTIFACT_ROOT = Path("data") / "artifacts" / "manager" / "stock_pool_manager"
 _MACRO_MANAGER_ARTIFACT_ROOT = Path("data") / "artifacts" / "manager" / "macro_manager"
-_PORTFOLIO_DECISION_ARTIFACT_ROOT = Path("data") / "artifacts" / "decision" / "portfolio_decision"
-_PORTFOLIO_BOOK_ARTIFACT_ROOT = Path("data") / "artifacts" / "decision" / "portfolio_book"
+
+# 默认路径，可通过 state 传入自定义路径
+_DEFAULT_PORTFOLIO_DECISION_ARTIFACT_ROOT = Path("data") / "artifacts" / "decision" /  "portfolio"
+
+
+def _get_artifact_root(state: Dict[str, Any], key: str, default: Path) -> Path:
+    """从 state 中获取 artifact 根目录，支持字符串或 Path"""
+    val = state.get(key)
+    if val:
+        return Path(str(val))
+    return default
 
 
 def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
@@ -136,21 +145,22 @@ def _load_upstream_payload(
         return None, path.as_posix(), f"读取失败: {path.as_posix()} ({e})"
 
 
-def _find_latest_portfolio_book(trade_date: str) -> Optional[Path]:
-    direct = _PORTFOLIO_BOOK_ARTIFACT_ROOT / trade_date / "result.json"
+def _find_latest_portfolio_book(trade_date: str, decision_root: Optional[Path] = None) -> Optional[Path]:
+    root = decision_root or _DEFAULT_PORTFOLIO_DECISION_ARTIFACT_ROOT
+    direct = root / trade_date / "result.json"
     if direct.exists():
         return direct
-    if not _PORTFOLIO_BOOK_ARTIFACT_ROOT.exists():
+    if not root.exists():
         return None
     dates: List[str] = []
-    for p in _PORTFOLIO_BOOK_ARTIFACT_ROOT.iterdir():
+    for p in root.iterdir():
         if p.is_dir() and p.name.isdigit() and len(p.name) == 8 and p.name <= trade_date:
             if (p / "result.json").exists():
                 dates.append(p.name)
     if not dates:
         return None
     latest = sorted(dates)[-1]
-    return _PORTFOLIO_BOOK_ARTIFACT_ROOT / latest / "result.json"
+    return root / latest / "result.json"
 
 
 def _extract_portfolio_table(data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -192,17 +202,19 @@ def create_load_upstream_artifacts_node():
             if err:
                 warnings.append(err)
 
-        portfolio_book_path = None
-        if state.get("portfolio_book_path"):
-            portfolio_book_path = Path(str(state.get("portfolio_book_path")))
+        # 从 portfolio_decision 读取上期持仓
+        prev_decision_path = None
+        if state.get("prev_decision_path"):
+            prev_decision_path = Path(str(state.get("prev_decision_path")))
         else:
-            portfolio_book_path = _find_latest_portfolio_book(trade_date)
+            decision_root = _get_artifact_root(state, "portfolio_decision_root", _DEFAULT_PORTFOLIO_DECISION_ARTIFACT_ROOT)
+            prev_decision_path = _find_latest_portfolio_book(trade_date, decision_root)
         portfolio_table: List[Dict[str, Any]] = []
-        if portfolio_book_path and portfolio_book_path.exists():
+        if prev_decision_path and prev_decision_path.exists():
             try:
-                portfolio_table = _extract_portfolio_table(_load_json_file(portfolio_book_path))
+                portfolio_table = _extract_portfolio_table(_load_json_file(prev_decision_path))
             except Exception as e:
-                warnings.append(f"读取资产组合表失败: {portfolio_book_path.as_posix()} ({e})")
+                warnings.append(f"读取资产组合表失败: {prev_decision_path.as_posix()} ({e})")
         initial_capital = _to_float(state.get("initial_capital"), 500000.0)
         if initial_capital <= 0:
             initial_capital = 500000.0
@@ -213,13 +225,13 @@ def create_load_upstream_artifacts_node():
             "stock_pool_manager_result": stock_pool_result or {},
             "macro_manager_summary": macro_summary or {},
             "portfolio_table": portfolio_table,
-            "portfolio_book_source_path": portfolio_book_path.as_posix() if portfolio_book_path else None,
+            "prev_decision_path": prev_decision_path.as_posix() if prev_decision_path else None,
             "initial_capital": initial_capital,
             "upstream_artifact_paths": {
                 "sector_manager_result_path": sector_path,
                 "stock_pool_manager_result_path": stock_pool_path,
                 "macro_manager_result_path": macro_path,
-                "portfolio_book_source_path": portfolio_book_path.as_posix() if portfolio_book_path else None,
+                "prev_decision_path": prev_decision_path.as_posix() if prev_decision_path else None,
             },
             "decision_warnings": warnings,
         }
@@ -649,7 +661,7 @@ def create_llm_make_decision_node(llm: Any, stock_manager_graph: Any = None):
                 "meta": {
                     "initial_capital": initial_capital,
                     "total_capital": initial_capital,
-                    "source_portfolio_path": state.get("portfolio_book_source_path"),
+                    "source_portfolio_path": state.get("prev_decision_path"),
                     "warnings": [
                         *(state.get("decision_warnings") or []),
                         "llm_error: llm is None",
@@ -681,7 +693,7 @@ def create_llm_make_decision_node(llm: Any, stock_manager_graph: Any = None):
 注意：
 - 请严格遵循 macro_hint.target_position 的仓位区间建议
 - 所有资产的 target_weight_pct 总和应在建议区间内
-- 首次建仓时分散配置，单只仓位建议 5%-15%
+- 首次建仓时分散配置，单只仓位建议 5%至25%
 - 调仓时优先保留基本面优秀的持仓，减持高风险资产"""
             prompt = ChatPromptTemplate.from_messages([("system", system_msg), ("human", human_msg)])
             chain = prompt | llm
@@ -705,7 +717,7 @@ def create_llm_make_decision_node(llm: Any, stock_manager_graph: Any = None):
                     "meta": {
                         "initial_capital": initial_capital,
                         "total_capital": initial_capital,
-                        "source_portfolio_path": state.get("portfolio_book_source_path"),
+                        "source_portfolio_path": state.get("prev_decision_path"),
                         "warnings": [
                             *(state.get("decision_warnings") or []),
                             f"llm_error: {e}",
@@ -729,7 +741,7 @@ def create_llm_make_decision_node(llm: Any, stock_manager_graph: Any = None):
             "meta": {
                 "initial_capital": initial_capital,
                 "total_capital": total_capital,
-                "source_portfolio_path": state.get("portfolio_book_source_path"),
+                "source_portfolio_path": state.get("prev_decision_path"),
                 "warnings": state.get("decision_warnings") or [],
                 "generated_at": datetime.now().astimezone().isoformat(),
             },
@@ -746,13 +758,14 @@ def create_persist_portfolio_decision_node():
         if not payload:
             return state
         trade_date = _normalize_trade_date(payload.get("trade_date") or state.get("trade_date"))
-        decision_dir = _PORTFOLIO_DECISION_ARTIFACT_ROOT / trade_date
+
+        # 从 state 获取自定义根目录，或使用默认路径
+        decision_root = _get_artifact_root(state, "portfolio_decision_root", _DEFAULT_PORTFOLIO_DECISION_ARTIFACT_ROOT)
+
+        decision_dir = decision_root / trade_date
         decision_result_path = decision_dir / "result.json"
         decision_manifest_path = decision_dir / "manifest.json"
 
-        book_dir = _PORTFOLIO_BOOK_ARTIFACT_ROOT / trade_date
-        book_result_path = book_dir / "result.json"
-        book_manifest_path = book_dir / "manifest.json"
         try:
             _write_json_atomic(decision_result_path, payload)
             _write_json_atomic(
@@ -766,36 +779,13 @@ def create_persist_portfolio_decision_node():
                     "result_path": decision_result_path.as_posix(),
                 },
             )
-            _write_json_atomic(
-                book_result_path,
-                {
-                    "trade_date": trade_date,
-                    "portfolio_table": payload.get("portfolio_table") or [],
-                    "operation_reason_table": payload.get("operation_reason_table") or [],
-                    "decision_summary": payload.get("decision_summary"),
-                    "meta": payload.get("meta") or {},
-                },
-            )
-            _write_json_atomic(
-                book_manifest_path,
-                {
-                    "artifact_type": "portfolio_book",
-                    "module": "agents.decision.portfolio_decision",
-                    "trade_date": trade_date,
-                    "created_at": datetime.now().astimezone().isoformat(),
-                    "status": "success",
-                    "result_path": book_result_path.as_posix(),
-                },
-            )
             return {
                 **state,
                 "decision_artifact_path": decision_result_path.as_posix(),
                 "decision_manifest_path": decision_manifest_path.as_posix(),
-                "portfolio_book_artifact_path": book_result_path.as_posix(),
-                "portfolio_book_manifest_path": book_manifest_path.as_posix(),
             }
         except Exception as e:
-            logger.warning("写入决策/组合产物失败: %s", e)
+            logger.warning("写入决策产物失败: %s", e)
             return state
 
     return persist_decision_node

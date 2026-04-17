@@ -1,10 +1,11 @@
 """
 投资组合净值可视化程序
-读取历史 portfolio_book 数据，绘制资金净值曲线并与上证指数对比
+读取历史 portfolio 数据（默认 2025_7d_for_once 策略），绘制资金净值曲线并与上证指数对比
 
 使用方法:
-    python -m visualization.portfolio_nav_visualization          # 显示图表
-    python -m visualization.portfolio_nav_visualization --no-show # 仅保存不显示
+    python -m visualization.portfolio_nav_visualization                    # 显示图表
+    python -m visualization.portfolio_nav_visualization --no-show         # 仅保存不显示
+    python -m visualization.portfolio_nav_visualization --strategy NAME    # 指定策略名称
 """
 from __future__ import annotations
 
@@ -36,13 +37,18 @@ def parse_position_percentage(position_str: str) -> float:
     return 0.0
 
 
-def read_portfolio_history(data_dir: str) -> List[Dict]:
-    """读取所有历史 portfolio_book 数据，包含仓位信息"""
+def read_portfolio_history(data_dir: str, strategy_name: str = "2025_7d_for_once") -> List[Dict]:
+    """读取所有历史 portfolio 数据，包含仓位信息
+    
+    Args:
+        data_dir: 数据根目录
+        strategy_name: 策略名称，默认为 "2025_7d_for_once"
+    """
     history = []
-    portfolio_dir = Path(data_dir) / "artifacts" / "decision" / "portfolio_book"
+    portfolio_dir = Path(data_dir) / "artifacts" / "decision" / strategy_name / "portfolio"
     
     if not portfolio_dir.exists():
-        raise FileNotFoundError(f"Portfolio book 目录不存在: {portfolio_dir}")
+        raise FileNotFoundError(f"Portfolio 目录不存在: {portfolio_dir}")
     
     for date_dir in sorted(portfolio_dir.iterdir()):
         if date_dir.is_dir():
@@ -345,31 +351,32 @@ def plot_combined_chart(
         plt.close(fig)
 
 
-def main(show_plot: bool = True):
+def main(show_plot: bool = True, strategy_name: str = "2025_7d_for_once"):
     """主函数
     
     Args:
         show_plot: 是否显示图表窗口（在后台模式下设为False）
+        strategy_name: 策略名称，默认为 "2025_7d_for_once"
     """
     # 确定数据目录
     script_dir = Path(__file__).parent
     data_dir = script_dir.parent / "data"
     
     print("=" * 60)
-    print("投资组合可视化")
+    print(f"投资组合可视化 - 策略: {strategy_name}")
     print("=" * 60)
     
     # 读取历史数据
-    print("\n读取 portfolio_book 历史数据...")
+    print(f"\n读取 {strategy_name} 历史数据...")
     try:
-        history = read_portfolio_history(str(data_dir))
+        history = read_portfolio_history(str(data_dir), strategy_name)
     except FileNotFoundError as e:
         print(f"错误: {e}")
         print("请确认数据目录路径正确")
         return
     
     if not history:
-        print("未找到任何 portfolio_book 数据")
+        print(f"未找到任何 {strategy_name} 数据")
         return
     
     print(f"成功读取 {len(history)} 条历史记录")
@@ -434,6 +441,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="投资组合净值可视化")
     parser.add_argument("--no-show", action="store_true", help="不显示图表，仅保存到文件")
     parser.add_argument("--output", "-o", type=str, default=None, help="输出文件路径")
+    parser.add_argument("--strategy", "-s", type=str, default="2025_7d_for_once", 
+                        help="策略名称 (默认: 2025_7d_for_once)")
     args = parser.parse_args()
     
-    main(show_plot=not args.no_show)
+    main(show_plot=not args.no_show, strategy_name=args.strategy)
