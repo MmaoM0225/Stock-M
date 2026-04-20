@@ -44,25 +44,18 @@ _SECTOR_TEMPLATE_LIBRARY: Dict[str, Dict[str, Any]] = {
     },
     "theme_momentum": {
         "min_market_cap": 40e8,
-        "max_pe": 80.0,
-        "max_pb": 12.0,
+        "max_pe": 100.0,
+        "max_pb": 15.0,
         "sort_by": "volume_ratio",
         "sort_order": "desc",
     },
     "fallback_balanced": {
         "min_market_cap": 70e8,
-        "max_pe": 35.0,
-        "max_pb": 5.0,
+        "max_pe": 60.0,
+        "max_pb": 10.0,
         "sort_by": "total_mv",
         "sort_order": "desc",
     },
-}
-
-_SECTOR_TEMPLATE_KEYWORDS: Dict[str, List[str]] = {
-    "value_defensive": ["银行", "保险", "公用", "交运", "煤炭", "电信", "运营商", "红利", "电力"],
-    "quality_growth": ["医药", "消费", "白酒", "家电", "食品", "创新药", "高端制造", "软件"],
-    "cyclical_rebound": ["有色", "化工", "钢铁", "建材", "航运", "周期", "资源", "水泥"],
-    "theme_momentum": ["人工智能", "ai", "半导体", "芯片", "机器人", "算力", "军工", "cpo", "卫星"],
 }
 
 _TEMPLATE_OVERRIDE_KEYS: Set[str] = {
@@ -435,13 +428,10 @@ def _apply_overrides_to_criteria(base: ScreenerCriteria, overrides: Dict[str, An
 
 
 def _infer_template_id_for_sector(sector_name: str) -> str:
-    """基于板块名称关键词做风格类比，返回模板ID。"""
-    lower_name = str(sector_name or "").strip().lower()
-    if not lower_name:
-        return "fallback_balanced"
-    for template_id, keywords in _SECTOR_TEMPLATE_KEYWORDS.items():
-        if any(kw.lower() in lower_name for kw in keywords):
-            return template_id
+    """
+    返回 fallback 模板。
+    模板选择已改为由 LLM 直接决策，不再使用关键词匹配。
+    """
     return "fallback_balanced"
 
 
@@ -468,6 +458,8 @@ def _apply_filters_without_sector(df: pd.DataFrame, criteria: ScreenerCriteria) 
         out = out[out["pb"] >= criteria.min_pb]
     if criteria.max_pb is not None and "pb" in out.columns:
         out = out[out["pb"] <= criteria.max_pb]
+
+    # 注：股价上限筛选暂时未启用，预留字段 max_price 供后续使用
 
     if criteria.min_listing_days and "list_date" in out.columns:
         from datetime import datetime, timedelta
@@ -617,9 +609,9 @@ def create_select_sector_templates_node(llm: Optional[Any] = None):
             fallback_plan = {
                 "decisions": {
                     sec: {
-                        "template_id": _infer_template_id_for_sector(sec),
+                        "template_id": "fallback_balanced",
                         "overrides": {},
-                        "reason": "关键词类比兜底",
+                        "reason": "LLM不可用，使用平衡模板兜底",
                         "confidence": 0.5,
                     }
                     for sec in sectors
@@ -669,13 +661,13 @@ def create_select_sector_templates_node(llm: Optional[Any] = None):
                 "_sector_template_plan": _normalize_template_plan(sectors, raw_plan),
             }
         except Exception as e:
-            logger.warning("模板决策 agent 失败，回退关键词类比: %s", e)
+            logger.warning("模板决策 LLM 失败，回退平衡模板: %s", e)
             fallback_plan = {
                 "decisions": {
                     sec: {
-                        "template_id": _infer_template_id_for_sector(sec),
+                        "template_id": "fallback_balanced",
                         "overrides": {},
-                        "reason": "agent失败兜底",
+                        "reason": "LLM决策失败，使用平衡模板兜底",
                         "confidence": 0.5,
                     }
                     for sec in sectors

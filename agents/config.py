@@ -45,7 +45,7 @@ class LLMConfig:
         self.max_retries = max_retries
         # 允许通过环境变量覆盖：LLM_TIMEOUT=90
         env_timeout = os.getenv("LLM_TIMEOUT")
-        self.timeout = timeout if timeout is not None else int(env_timeout) if env_timeout else 90
+        self.timeout = timeout if timeout is not None else int(env_timeout) if env_timeout else 150
     
     def _get_api_key(self, provider: str) -> str:
         """

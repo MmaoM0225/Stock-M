@@ -1,11 +1,12 @@
 """
 投资组合净值可视化程序
-读取历史 portfolio 数据（默认 2025_7d_for_once 策略），绘制资金净值曲线并与上证指数对比
+读取历史 portfolio 数据，绘制资金净值曲线并与上证指数对比
 
 使用方法:
-    python -m visualization.portfolio_nav_visualization                    # 显示图表
-    python -m visualization.portfolio_nav_visualization --no-show         # 仅保存不显示
-    python -m visualization.portfolio_nav_visualization --strategy NAME    # 指定策略名称
+    python -m visualization.portfolio_nav_visualization                    # 可视化默认策略 (2025_7d_for_once)
+    python -m visualization.portfolio_nav_visualization --no-show          # 仅保存不显示
+    python -m visualization.portfolio_nav_visualization --strategy NAME    # 指定策略名称，如 2025_7d_for_once_ver1.1
+    python -m visualization.portfolio_nav_visualization -s 2025_7d_for_once_ver1.1 -o custom.png  # 指定策略和输出文件
 """
 from __future__ import annotations
 
@@ -21,6 +22,11 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from matplotlib import font_manager
 import numpy as np
+
+# 导入数据获取模块
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from dataflow.kline_data import KLineDataFetcher
+from dataflow.config import DATA_SOURCES
 
 
 # 设置中文字体
@@ -117,33 +123,61 @@ def calculate_nav(history: List[Dict]) -> Tuple[List[datetime], List[float], Lis
     return dates, nav_values, total_capitals
 
 
-def load_sh_index_data() -> Dict[str, float]:
-    """加载上证指数数据（示例数据，实际应从数据源获取）
+def load_index_data(ts_code: str, start_date: str = None, end_date: str = None) -> Dict[str, float]:
+    """加载指数数据
+    
+    从 Tushare 获取真实的指数日线数据
+    
+    Args:
+        ts_code: 指数代码，如 000001.SH（上证指数）、000300.SH（沪深300）
+        start_date: 开始日期，格式 YYYYMMDD（可选，默认从投资组合最早日期）
+        end_date: 结束日期，格式 YYYYMMDD（可选，默认到投资组合最晚日期）
     
     返回: {日期字符串: 收盘点位} 的字典
     """
-    # 这里是示例数据，实际使用时应从数据库或API获取
-    # 数据为2025年1月至5月的上证指数近似值
-    sample_data = {
-        "20250102": 3350.0,
-        "20250109": 3220.0,
-        "20250116": 3240.0,
-        "20250123": 3210.0,
-        "20250207": 3300.0,
-        "20250214": 3340.0,
-        "20250221": 3380.0,
-        "20250228": 3320.0,
-        "20250307": 3380.0,
-        "20250314": 3420.0,
-        "20250321": 3360.0,
-        "20250328": 3350.0,
-        "20250407": 3200.0,
-        "20250414": 3280.0,
-        "20250421": 3300.0,
-        "20250428": 3320.0,
-        "20250508": 3350.0,
-    }
-    return sample_data
+    # 如果未启用 Tushare，返回空字典（后续会处理为None显示警告）
+    if not DATA_SOURCES.get('tushare', {}).get('enabled', False):
+        print(f"警告: Tushare 未启用，无法获取 {ts_code} 数据")
+        return {}
+    
+    try:
+        fetcher = KLineDataFetcher()
+        
+        # 获取指数日线数据
+        df = fetcher.fetch_index_daily_data(
+            ts_code=ts_code,
+            start_date=start_date,
+            end_date=end_date
+        )
+        
+        if df.empty:
+            print(f"警告: 未获取到 {ts_code} 数据")
+            return {}
+        
+        # 转换为字典 {日期: 收盘点位}
+        result = {}
+        for _, row in df.iterrows():
+            date_str = str(row['trade_date'])
+            close_price = float(row['close'])
+            result[date_str] = close_price
+        
+        index_name = "上证指数" if ts_code == "000001.SH" else ("沪深300" if ts_code == "000300.SH" else ts_code)
+        print(f"成功获取 {index_name} 数据: {len(result)} 条记录")
+        if result:
+            dates = sorted(result.keys())
+            print(f"  数据范围: {dates[0]} ~ {dates[-1]}")
+        
+        return result
+        
+    except Exception as e:
+        print(f"获取 {ts_code} 数据失败: {e}")
+        return {}
+
+
+# 为了保持向后兼容，保留旧函数名作为别名
+def load_sh_index_data(start_date: str = None, end_date: str = None) -> Dict[str, float]:
+    """加载上证指数数据（向后兼容的别名）"""
+    return load_index_data("000001.SH", start_date, end_date)
 
 
 def align_sh_index(
@@ -188,9 +222,20 @@ def align_sh_index(
 def calculate_performance_metrics(
     dates: List[datetime],
     nav_values: List[float],
-    sh_nav: List[float]
+    sh_nav: List[float],
+    hs300_nav: Optional[List[float]] = None
 ) -> Dict:
-    """计算业绩指标"""
+    """计算业绩指标
+    
+    Args:
+        dates: 日期列表
+        nav_values: 投资组合净值列表
+        sh_nav: 上证指数净值列表
+        hs300_nav: 沪深300净值列表（可选）
+    
+    Returns:
+        包含各项业绩指标的字典
+    """
     metrics = {}
     
     if len(nav_values) < 2:
@@ -198,10 +243,21 @@ def calculate_performance_metrics(
     
     # 总收益率
     metrics["total_return"] = (nav_values[-1] - 1) * 100
+    
+    # 上证指数收益率
     metrics["sh_total_return"] = (sh_nav[-1] - 1) * 100 if sh_nav else 0
     
-    # 超额收益
+    # 沪深300收益率
+    if hs300_nav:
+        metrics["hs300_total_return"] = (hs300_nav[-1] - 1) * 100
+    else:
+        metrics["hs300_total_return"] = 0
+    
+    # 超额收益（相对上证指数）
     metrics["excess_return"] = metrics["total_return"] - metrics["sh_total_return"]
+    
+    # 超额收益（相对沪深300）
+    metrics["excess_return_hs300"] = metrics["total_return"] - metrics["hs300_total_return"]
     
     # 计算日收益率序列
     daily_returns = []
@@ -247,7 +303,9 @@ def plot_combined_chart(
     total_capitals: List[float],
     metrics: Dict,
     output_path: Optional[str] = None,
-    show_plot: bool = True
+    show_plot: bool = True,
+    hs300_nav: Optional[List[float]] = None,
+    strategy_name: str = "default"
 ):
     """绘制组合图表：上面收益对比，下面仓位变化
     
@@ -262,6 +320,8 @@ def plot_combined_chart(
         metrics: 业绩指标字典
         output_path: 图表保存路径
         show_plot: 是否显示图表（在后台模式下设为False）
+        hs300_nav: 沪深300净值列表（可选）
+        strategy_name: 策略名称，用于图表标题
     """
     # 在无图形界面环境下使用非交互式后端
     if not show_plot:
@@ -270,12 +330,17 @@ def plot_combined_chart(
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), gridspec_kw={'height_ratios': [2, 1]})
     
     # ========== 子图1: 收益对比（净值）==========
-    ax1.plot(dates_nav, nav_values, 'b-', linewidth=2, label='投资组合净值', marker='o', markersize=4)
+    ax1.plot(dates_nav, nav_values, 'b-', linewidth=2.5, label='投资组合净值', marker='o', markersize=5)
     if sh_nav:
-        ax1.plot(dates_nav, sh_nav, 'r--', linewidth=1.5, label='上证指数（归一化）', marker='s', markersize=3, alpha=0.7)
+        ax1.plot(dates_nav, sh_nav, 'r--', linewidth=1.5, label='上证指数', marker='s', markersize=3, alpha=0.7)
+    if hs300_nav:
+        ax1.plot(dates_nav, hs300_nav, 'g--', linewidth=1.5, label='沪深300', marker='^', markersize=3, alpha=0.7)
     
     ax1.set_ylabel('净值（初始=1）', fontsize=12)
-    ax1.set_title('投资组合净值走势 vs 上证指数', fontsize=14, fontweight='bold')
+    title = f'[{strategy_name}] 投资组合净值走势 vs 上证指数'
+    if hs300_nav:
+        title = f'[{strategy_name}] 投资组合净值走势 vs 上证指数/沪深300'
+    ax1.set_title(title, fontsize=14, fontweight='bold')
     ax1.legend(loc='upper left', fontsize=10)
     ax1.grid(True, alpha=0.3)
     ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
@@ -286,7 +351,9 @@ def plot_combined_chart(
     metrics_text = f"""业绩指标:
 组合收益: {metrics.get('total_return', 0):.2f}%
 上证收益: {metrics.get('sh_total_return', 0):.2f}%
-超额收益: {metrics.get('excess_return', 0):.2f}%
+沪深300收益: {metrics.get('hs300_total_return', 0):.2f}%
+超额收益(相对上证): {metrics.get('excess_return', 0):.2f}%
+超额收益(相对沪深300): {metrics.get('excess_return_hs300', 0):.2f}%
 最大回撤: {metrics.get('max_drawdown', 0):.2f}%
 年化收益: {metrics.get('annualized_return', 0):.2f}%
 夏普比率: {metrics.get('sharpe_ratio', 0):.2f}"""
@@ -305,7 +372,7 @@ def plot_combined_chart(
     
     ax2.set_ylabel('仓位 (%)', fontsize=12)
     ax2.set_xlabel('日期', fontsize=12)
-    ax2.set_title('仓位变化趋势', fontsize=12)
+    ax2.set_title(f'[{strategy_name}] 仓位变化趋势', fontsize=12)
     ax2.legend(loc='upper right', fontsize=9)
     ax2.grid(True, alpha=0.3)
     ax2.set_ylim(0, 100)
@@ -351,12 +418,13 @@ def plot_combined_chart(
         plt.close(fig)
 
 
-def main(show_plot: bool = True, strategy_name: str = "2025_7d_for_once"):
+def main(show_plot: bool = True, strategy_name: str = "2025_7d_for_once", output_path: Optional[str] = None):
     """主函数
     
     Args:
         show_plot: 是否显示图表窗口（在后台模式下设为False）
         strategy_name: 策略名称，默认为 "2025_7d_for_once"
+        output_path: 输出文件路径（可选，默认自动生成包含策略名的文件名）
     """
     # 确定数据目录
     script_dir = Path(__file__).parent
@@ -406,18 +474,28 @@ def main(show_plot: bool = True, strategy_name: str = "2025_7d_for_once"):
     # 计算净值用于业绩指标
     dates_nav, nav_values, _ = calculate_nav(history)
     
-    # 加载上证指数数据
-    sh_index_data = load_sh_index_data()
+    # 加载指数数据（使用投资组合的日期范围）
+    start_date = history[0]['trade_date'] if history else None
+    end_date = history[-1]['trade_date'] if history else None
+    
+    print("\n加载指数数据...")
+    sh_index_data = load_index_data("000001.SH", start_date=start_date, end_date=end_date)
     sh_values, sh_nav = align_sh_index(dates_nav, nav_values, sh_index_data)
     
+    # 加载沪深300数据
+    hs300_data = load_index_data("000300.SH", start_date=start_date, end_date=end_date)
+    _, hs300_nav = align_sh_index(dates_nav, nav_values, hs300_data)
+    
     # 计算业绩指标
-    metrics = calculate_performance_metrics(dates_nav, nav_values, sh_nav)
+    metrics = calculate_performance_metrics(dates_nav, nav_values, sh_nav, hs300_nav)
     
     # 打印业绩指标
     print("\n业绩指标:")
     print(f"  组合总收益率: {metrics.get('total_return', 0):.2f}%")
     print(f"  上证总收益率: {metrics.get('sh_total_return', 0):.2f}%")
-    print(f"  超额收益: {metrics.get('excess_return', 0):.2f}%")
+    print(f"  沪深300收益率: {metrics.get('hs300_total_return', 0):.2f}%")
+    print(f"  超额收益(相对上证): {metrics.get('excess_return', 0):.2f}%")
+    print(f"  超额收益(相对沪深300): {metrics.get('excess_return_hs300', 0):.2f}%")
     print(f"  最大回撤: {metrics.get('max_drawdown', 0):.2f}%")
     if 'annualized_return' in metrics:
         print(f"  年化收益率: {metrics['annualized_return']:.2f}%")
@@ -426,14 +504,23 @@ def main(show_plot: bool = True, strategy_name: str = "2025_7d_for_once"):
     
     # 绘制组合图表
     print("\n生成可视化图表...")
-    output_path = script_dir / "portfolio_combined_chart.png"
+    
+    # 根据策略名称生成输出文件名
+    if output_path:
+        final_output_path = Path(output_path)
+    else:
+        # 默认文件名包含策略名称，避免不同版本覆盖
+        safe_strategy_name = strategy_name.replace(".", "_")
+        final_output_path = script_dir / f"portfolio_{safe_strategy_name}_chart.png"
+    
     plot_combined_chart(
         dates_nav, nav_values, sh_nav,
         dates_position, stock_positions, cash_positions, total_capitals,
-        metrics, str(output_path), show_plot=show_plot
+        metrics, str(final_output_path), show_plot=show_plot,
+        hs300_nav=hs300_nav, strategy_name=strategy_name
     )
     
-    print(f"图表文件: {output_path}")
+    print(f"图表文件: {final_output_path}")
     print("\n完成!")
 
 
@@ -445,4 +532,4 @@ if __name__ == "__main__":
                         help="策略名称 (默认: 2025_7d_for_once)")
     args = parser.parse_args()
     
-    main(show_plot=not args.no_show, strategy_name=args.strategy)
+    main(show_plot=not args.no_show, strategy_name=args.strategy, output_path=args.output)

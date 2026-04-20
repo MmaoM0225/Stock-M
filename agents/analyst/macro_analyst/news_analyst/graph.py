@@ -35,12 +35,12 @@ class NewsState(TypedDict, total=False):
     news_analysis_manifest_path: str
     messages: List[Any]
 
-def create_news_graph(llm, fetcher: Optional[Any] = None):
+def create_news_graph(llm, finlight_fetcher: Optional[Any] = None):
     """
-    构建新闻分析子图（map-reduce 风格）。
+    构建新闻分析子图（map-reduce 风格，全面使用 Finlight API）。
 
     流程：
-    1. news_fetch：判断交易日 → 本地/拉取新闻 → 获取完整行业列表（dataflow.industry_data）
+    1. news_fetch：判断交易日 → 从 Finlight API 获取新闻（优先本地缓存） → 获取完整行业列表
     2. map_sections_to_extract：根据 news_sections 动态生成并行的 news_extract 调用（Send）
     3. news_extract：对单条新闻 section 抽取结构化事件（LLM 判断），写入 events
     4. news_reduce：对所有 events 做板块与宏观环境汇总，写入 news_analysis
@@ -48,7 +48,7 @@ def create_news_graph(llm, fetcher: Optional[Any] = None):
 
     Args:
         llm: 支持 with_structured_output 的 LLM 实例
-        fetcher: NewsSentimentFetcher，用于本地读取或远程抓取新闻（必须提供）
+        finlight_fetcher: FinlightDataFetcher 实例（可选，如未提供则自动创建）
 
     Returns:
         已编译的新闻分析子图，可直接 invoke / stream。
@@ -56,7 +56,7 @@ def create_news_graph(llm, fetcher: Optional[Any] = None):
     builder = StateGraph(NewsState)
 
     # 注册节点
-    builder.add_node("news_fetch", create_news_fetch_node(fetcher))
+    builder.add_node("news_fetch", create_news_fetch_node(finlight_fetcher))
     builder.add_node("news_extract", create_news_extract_node(llm))
     builder.add_node("news_reduce", create_news_reduce_node(llm))
     builder.add_node("news_result_persist", create_news_result_persist_node())

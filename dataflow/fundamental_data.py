@@ -11,7 +11,8 @@ import logging
 from .config import DATA_SOURCES
 from .utils import (
     format_date, validate_stock_code,
-    clean_dataframe, DataFlowException
+    clean_dataframe, DataFlowException,
+    with_retry
 )
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,7 @@ class FundamentalDataFetcher:
             ts.set_token(DATA_SOURCES['tushare']['token'])
             self.ts_pro = ts.pro_api()
     
+    @with_retry(max_retries=3, retry_on_empty=True)
     def fetch_company_info(
         self, 
         ts_code: str, 
@@ -99,6 +101,7 @@ class FundamentalDataFetcher:
             logger.error(f"获取公司基础信息失败: {e}")
             raise DataFlowException(f"获取公司基础信息失败: {e}")
     
+    @with_retry(max_retries=3, retry_on_empty=True)
     def fetch_daily_basic(
         self,
         ts_code: str = None,
@@ -197,6 +200,7 @@ class FundamentalDataFetcher:
             logger.error(f"获取每日基本面指标失败: {e}")
             raise DataFlowException(f"获取每日基本面指标失败: {e}")
     
+    @with_retry(max_retries=5, retry_on_empty=False)  # 财务数据更重要，更多重试
     def fetch_income_statement(
         self,
         ts_code: str,
@@ -313,6 +317,7 @@ class FundamentalDataFetcher:
             logger.error(f"获取利润表数据失败: {e}")
             raise DataFlowException(f"获取利润表数据失败: {e}")
     
+    @with_retry(max_retries=5, retry_on_empty=False)
     def fetch_balance_sheet(
         self,
         ts_code: str,
@@ -434,6 +439,7 @@ class FundamentalDataFetcher:
             logger.error(f"获取资产负债表数据失败: {e}")
             raise DataFlowException(f"获取资产负债表数据失败: {e}")
     
+    @with_retry(max_retries=5, retry_on_empty=False)
     def fetch_cashflow_statement(
         self,
         ts_code: str,
@@ -597,6 +603,7 @@ class FundamentalDataFetcher:
             fields=fields,
         )
 
+    @with_retry(max_retries=3, retry_on_empty=False)  # 分红数据可选，空数据可接受
     def fetch_dividend(
         self,
         ts_code: str = None,
@@ -667,6 +674,7 @@ class FundamentalDataFetcher:
             logger.error(f"获取分红送股数据失败: {e}")
             raise DataFlowException(f"获取分红送股数据失败: {e}")
     
+    @with_retry(max_retries=3, retry_on_empty=False)
     def fetch_financial_indicators(
         self,
         ts_code: str,

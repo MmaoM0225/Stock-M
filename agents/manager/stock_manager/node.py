@@ -279,10 +279,11 @@ def create_stock_summary_node(llm):
             else:
                 action_signal = "sell"
                 signal_reason = "综合评分偏低，风险收益比不占优。"
-            # 判断分析是否成功：基本面或技术面至少有一个成功且有有效评分
+            # 判断分析是否成功：基本面和技术面都必须成功且有有效评分
+            # 只要有一项失败，整体就标记为失败
             success = (
                 (fa.get("success") and fs is not None)
-                or (ta.get("success") and ts is not None)
+                and (ta.get("success") and ts is not None)
             )
 
             return {
@@ -344,17 +345,16 @@ def create_stock_summary_node(llm):
 
         component = data.get("component_scores") or {}
 
-        # 判断分析是否成功：综合评分有效且至少有一个子分析成功
+        # 判断分析是否成功：综合评分有效且基本面和技术面都必须成功
         # 注意：fa 可能是 None 或空字典，需要检查
         fundamental_success = isinstance(fa, dict) and fa.get("success", False)
         technical_success = isinstance(ta, dict) and ta.get("success", False)
         # 如果基本面或技术面分析完全缺失（null/None），标记为失败
         fundamental_exists = fa is not None and isinstance(fa, dict) and "success" in fa
         technical_exists = ta is not None and isinstance(ta, dict) and "success" in ta
-        success = score is not None and (fundamental_success or technical_success)
-        # 如果两个分析都缺失，强制标记为失败
-        if not fundamental_exists and not technical_exists:
-            success = False
+        # 逻辑：综合评分有效，且所有存在的分析都必须成功
+        # 如果任一存在的分析失败，则整体标记为失败
+        success = score is not None and fundamental_exists and technical_exists and fundamental_success and technical_success
 
         out = {
             "ts_code": data.get("ts_code") or ts_code,

@@ -1,5 +1,5 @@
 """
-新闻分析子图 Demo。
+新闻分析子图 Demo（全面使用 Finlight API）。
 
 可以直接运行本文件，查看 map-reduce 子图是否能够正确运行：
 
@@ -19,7 +19,7 @@ from langchain_openai import ChatOpenAI
 from .graph import create_news_graph
 from ....config import get_llm_config, validate_config
 from ....callbacks import get_llm_callbacks
-from dataflow.news_sentiment import NewsSentimentFetcher
+from dataflow.finlight_data import FinlightDataFetcher
 
 
 def _parse_trade_date(s: str) -> datetime:
@@ -31,13 +31,13 @@ def _parse_trade_date(s: str) -> datetime:
 
 
 def _resolve_trade_date(
-    fetcher: NewsSentimentFetcher,
+    finlight_fetcher: FinlightDataFetcher,
     target_date: Optional[datetime],
 ) -> str:
     """
     解析要分析的交易日期。
     - 若指定 target_date：返回该日期（YYYYMMDD）。
-    - 若未指定：从今天起往前查找最近有数据的工作日。
+    - 若未指定：使用今天日期（Finlight 会自动获取最新新闻）。
     """
     today = datetime.now()
     if target_date is not None:
@@ -45,20 +45,11 @@ def _resolve_trade_date(
             print(f"警告: {target_date.date()} 为周末，仍将尝试获取该日新闻。")
         return target_date.strftime("%Y%m%d")
 
-    # 未指定日期：从今天往前查找有数据的工作日
-    for i in range(7):
-        check_date = today - timedelta(days=i)
-        if check_date.weekday() >= 5:
-            continue
-        trade_date = check_date.strftime("%Y%m%d")
-        print(f"尝试查找日期 {trade_date} 是否有新闻数据...")
-        news_data = fetcher.get_news_by_date(trade_date)
-        if news_data:
-            print(f"找到日期 {trade_date} 的新闻数据。")
-            return trade_date
-
-    print("未找到近期新闻数据，使用今日日期。")
-    return today.strftime("%Y%m%d")
+    # 未指定日期：使用今天日期，Finlight 会获取最新新闻
+    trade_date = today.strftime("%Y%m%d")
+    print(f"未指定日期，使用今日日期: {trade_date}")
+    print("Finlight 将获取最新中国相关新闻（优先本地缓存）")
+    return trade_date
 
 
 def main():
@@ -96,12 +87,13 @@ def main():
         callbacks=get_llm_callbacks(),
     )
 
-    # 2. 构建 fetcher，fetch 节点负责获取新闻和完整行业列表（dataflow.industry_data）
-    fetcher = NewsSentimentFetcher()
-    graph = create_news_graph(llm, fetcher)
+    # 2. 构建 Finlight fetcher，fetch 节点负责获取新闻和完整行业列表
+    print("初始化 Finlight API...")
+    finlight_fetcher = FinlightDataFetcher()
+    graph = create_news_graph(llm, finlight_fetcher)
 
-    # 3. 构建 invoke 输入（只传 trade_date，由 news_fetch 节点通过 fetcher 拉取新闻）
-    trade_date = _resolve_trade_date(fetcher, target_date)
+    # 3. 构建 invoke 输入（只传 trade_date，由 news_fetch 节点通过 Finlight 拉取新闻）
+    trade_date = _resolve_trade_date(finlight_fetcher, target_date)
     invoke_input: Dict[str, Any] = {"trade_date": trade_date}
     print(f"交易日 {trade_date}，由 news_fetch 节点获取新闻。")
 
@@ -112,7 +104,7 @@ def main():
 
     elapsed = time.perf_counter() - start_time
     news_source = result.get("news_source", "")
-    source_desc = "本地" if news_source == "local" else "远程抓取" if news_source == "fetch" else "未知"
+    source_desc = "本地缓存" if news_source == "local" else "API 请求" if news_source == "api" else "未知"
     print(f"新闻分析子图运行完成，耗时 {elapsed:.2f} 秒。（新闻来源: {source_desc}）")
 
     from pprint import pprint

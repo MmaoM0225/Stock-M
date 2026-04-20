@@ -21,6 +21,10 @@ AKSHARE_ENABLED = True
 # 新闻数据配置
 NEWS_API_KEY = os.getenv('NEWS_API_KEY', '')
 
+# Finlight API配置
+FINLIGHT_API_KEY = os.getenv('FINLIGHT_API_KEY', '')
+FINLIGHT_BASE_URL = os.getenv('FINLIGHT_BASE_URL', 'https://api.finlight.com/v1')
+
 # 请求配置
 REQUEST_TIMEOUT = 30
 MAX_RETRIES = 3

@@ -11,7 +11,7 @@ import pandas as pd
 import tushare as ts
 
 from .config import DATA_SOURCES
-from .utils import clean_dataframe, DataFlowException
+from .utils import clean_dataframe, DataFlowException, with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,7 @@ def _get_ts_pro():
     return ts.pro_api()
 
 
+@with_retry(max_retries=3, retry_on_empty=True)
 def fetch_industry_list(
     level: str = "L1",
     src: str = "SW2021",
@@ -57,6 +58,7 @@ def fetch_industry_list(
         raise DataFlowException(f"获取行业分类失败: {e}") from e
 
 
+@with_retry(max_retries=3, retry_on_empty=True)
 def fetch_industry_members(
     l1_code: Optional[str] = None,
     l2_code: Optional[str] = None,
@@ -95,6 +97,7 @@ def fetch_industry_members(
         raise DataFlowException(f"获取行业成分股失败: {e}") from e
 
 
+@with_retry(max_retries=3, retry_on_empty=True)
 def fetch_ths_index(
     ts_code: Optional[str] = None,
     exchange: Optional[str] = None,
@@ -139,6 +142,7 @@ def fetch_ths_index(
         raise DataFlowException(f"获取同花顺板块指数失败: {e}") from e
 
 
+@with_retry(max_retries=3, retry_on_empty=True)
 def fetch_moneyflow_cnt_ths(
     ts_code: Optional[str] = None,
     trade_date: Optional[str] = None,
@@ -238,6 +242,7 @@ def fetch_moneyflow_cnt_ths_range(
     return out
 
 
+@with_retry(max_retries=3, retry_on_empty=True)
 def fetch_sw_daily(
     ts_code: Optional[str] = None,
     trade_date: Optional[str] = None,
@@ -343,6 +348,7 @@ def fetch_sw_daily_range(
     return out
 
 
+@with_retry(max_retries=3, retry_on_empty=True)
 def fetch_ths_daily(
     ts_code: Optional[str] = None,
     trade_date: Optional[str] = None,
@@ -449,6 +455,7 @@ def fetch_ths_daily_range(
     return out
 
 
+@with_retry(max_retries=3, retry_on_empty=False)
 def fetch_stock_industry(
     ts_code: str,
     is_new: str = "Y",

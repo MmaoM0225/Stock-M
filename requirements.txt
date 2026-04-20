@@ -9,6 +9,9 @@ requests>=2.28.0
 beautifulsoup4>=4.11.0
 lxml>=4.9.0
 
+# 全球金融新闻 API
+finlight-client>=0.1.0
+
 # 数据处理
 ta-lib>=0.4.25
 scikit-learn>=1.1.0
@@ -33,3 +36,7 @@ pydantic>=2.0.0
 # 开发和测试
 pytest>=7.0.0
 pytest-asyncio>=0.21.0
+
+# 可视化
+matplotlib>=3.7.0
+numpy>=1.24.0

@@ -233,7 +233,16 @@ def create_pool_reduce_node():
         candidate_stocks.sort(key=_cand_sort_key, reverse=True)
         top_stocks = candidate_stocks[:10]
 
-        ok = sum(1 for a in analyses if not a.get("error"))
+        # 统计成功：既要没有error，又要有stock_manager_summary且success为true
+        def _is_success(a: Dict[str, Any]) -> bool:
+            if a.get("error"):
+                return False
+            sm = a.get("stock_manager_summary")
+            if not isinstance(sm, dict):
+                return False
+            return bool(sm.get("success", False))
+
+        ok = sum(1 for a in analyses if _is_success(a))
         err_n = len(analyses) - ok
         if pool_err:
             summary_text = f"未执行分析：{pool_err}"

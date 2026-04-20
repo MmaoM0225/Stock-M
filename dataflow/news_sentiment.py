@@ -6,7 +6,7 @@ import pandas as pd
 import tushare as ts
 import requests
 import akshare as ak
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union
 from datetime import datetime, date
 import logging
 import json
@@ -17,6 +17,7 @@ from .utils import (
     format_date, validate_stock_code,
     clean_dataframe, DataFlowException
 )
+from .finlight_data import FinlightDataFetcher
 
 logger = logging.getLogger(__name__)
 
@@ -24,14 +25,21 @@ logger = logging.getLogger(__name__)
 class NewsSentimentFetcher:
     """新闻舆情数据获取器"""
     
-    def __init__(self):
-        """初始化"""
+    def __init__(self, finlight_api_key: Optional[str] = None):
+        """初始化
+        
+        Args:
+            finlight_api_key: Finlight API Key（可选），如未提供则从环境变量读取
+        """
         self.tushare_enabled = DATA_SOURCES['tushare']['enabled']
         if self.tushare_enabled:
             ts.set_token(DATA_SOURCES['tushare']['token'])
             self.ts_pro = ts.pro_api()
         
         self.news_api_key = NEWS_API_KEY
+        
+        # 初始化 Finlight 获取器
+        self.finlight_fetcher = FinlightDataFetcher(api_key=finlight_api_key)
     
     def fetch_eastmoney_breakfast_news(self) -> pd.DataFrame:
         """获取东方财富财经早餐数据
@@ -345,5 +353,131 @@ class NewsSentimentFetcher:
             logger.error(f"读取财经早餐数据失败: {str(e)}")
             raise DataFlowException(f"读取财经早餐数据失败: {str(e)}")
     
+    def fetch_finlight_news(
+        self,
+        query: Optional[str] = None,
+        countries: Optional[List[str]] = None,
+        categories: Optional[List[str]] = None,
+        page_size: int = 50,
+        as_sections: bool = True,
+        use_cache: bool = True,
+    ) -> Union[Dict[str, Any], List[Dict[str, str]]]:
+        """通过 Finlight API 获取全球金融新闻（优先使用本地缓存）
+        
+        可作为东方财富新闻的补充源，特别适用于：
+        - 地缘政治风险评估
+        - 国际市场情绪监测
+        - 大宗商品和能源新闻
+        
+        Args:
+            query: 搜索查询，如 "country:CN"
+            countries: 国家代码列表，如 ["CN", "US"]
+            categories: 分类列表，如 ["geopolitics", "energy"]
+            page_size: 每页数量
+            as_sections: 是否转换为 sections 格式（供 news_analyst 使用）
+            use_cache: 是否优先使用本地缓存，默认 True
+            
+        Returns:
+            如果 as_sections=True: 返回 sections 列表
+            如果 as_sections=False: 返回原始 API 响应
+            
+        Raises:
+            DataFlowException: 当 API 调用失败时抛出异常
+        """
+        try:
+            logger.info(f"开始获取 Finlight 新闻: query={query}, categories={categories}, use_cache={use_cache}")
+            
+            result = self.finlight_fetcher.fetch_articles(
+                query=query,
+                countries=countries,
+                categories=categories,
+                page_size=page_size,
+                use_cache=use_cache,
+            )
+            
+            if as_sections:
+                sections = self.finlight_fetcher.convert_to_sections_format(result)
+                logger.info(f"成功获取并转换 {len(sections)} 条 Finlight 新闻")
+                return sections
+            
+            logger.info(f"成功获取 Finlight 新闻，共 {len(result.get('articles', []))} 条")
+            return result
+            
+        except Exception as e:
+            logger.error(f"获取 Finlight 新闻失败: {str(e)}")
+            raise DataFlowException(f"获取 Finlight 新闻失败: {str(e)}")
     
+    def fetch_finlight_china_news(
+        self,
+        categories: Optional[List[str]] = None,
+        page_size: int = 50,
+        as_sections: bool = True,
+        use_cache: bool = True,
+    ) -> Union[Dict[str, Any], List[Dict[str, str]]]:
+        """便捷方法：获取中国相关新闻（优先使用本地缓存）
+        
+        Args:
+            categories: 分类筛选
+            page_size: 每页数量
+            as_sections: 是否转换为 sections 格式
+            use_cache: 是否优先使用本地缓存，默认 True
+            
+        Returns:
+            sections 列表或原始响应
+        """
+        return self.fetch_finlight_news(
+            query="country:CN",
+            categories=categories,
+            page_size=page_size,
+            as_sections=as_sections,
+            use_cache=use_cache,
+        )
+    
+    def get_combined_news_sections(
+        self,
+        date_str: str,
+        use_finlight: bool = True,
+        finlight_categories: Optional[List[str]] = None,
+        use_finlight_cache: bool = True,
+    ) -> List[Dict[str, str]]:
+        """获取组合新闻 sections（东方财富 + Finlight，优先使用本地缓存）
+        
+        Args:
+            date_str: 日期字符串，格式 YYYYMMDD
+            use_finlight: 是否同时获取 Finlight 新闻
+            finlight_categories: Finlight 新闻分类筛选
+            use_finlight_cache: 是否优先使用 Finlight 本地缓存，默认 True
+            
+        Returns:
+            List[Dict]: 合并后的 sections 列表
+        """
+        sections = []
+        
+        # 1. 获取东方财富新闻（原有逻辑）
+        try:
+            eastmoney_data = self.get_news_by_date(date_str)
+            if eastmoney_data:
+                sections.extend(eastmoney_data.get("sections", []))
+                logger.info(f"东方财富新闻: {len(eastmoney_data.get('sections', []))} 条")
+        except Exception as e:
+            logger.warning(f"获取东方财富新闻失败: {e}")
+        
+        # 2. 获取 Finlight 新闻（新增，优先使用缓存）
+        if use_finlight:
+            try:
+                finlight_sections = self.fetch_finlight_china_news(
+                    categories=finlight_categories,
+                    page_size=30,
+                    as_sections=True,
+                    use_cache=use_finlight_cache,
+                )
+                if isinstance(finlight_sections, list):
+                    sections.extend(finlight_sections)
+                    logger.info(f"Finlight 新闻: {len(finlight_sections)} 条")
+            except Exception as e:
+                logger.warning(f"获取 Finlight 新闻失败: {e}")
+        
+        logger.info(f"组合新闻总计: {len(sections)} 条")
+        return sections
+
 

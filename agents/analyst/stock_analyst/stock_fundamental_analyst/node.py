@@ -13,7 +13,7 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 from langchain_core.runnables import RunnableConfig
@@ -162,8 +162,47 @@ def _pick_prev_dividend(rows: List[Dict[str, Any]], latest_end_date: str, latest
     )
 
 
+def _fetch_single_data_type(
+    fetcher,
+    fetch_method: str,
+    ts_code: str,
+    data_type: str,
+    **kwargs
+) -> Tuple[Any, bool, Optional[str]]:
+    """
+    独立获取单个数据类型，隔离错误
+    
+    Returns:
+        (data, success, error_message)
+        - data: 获取的数据（DataFrame或空）
+        - success: 是否成功获取
+        - error_message: 错误信息（失败时）
+    """
+    try:
+        method = getattr(fetcher, fetch_method)
+        result = method(ts_code=ts_code, **kwargs)
+        
+        if result is not None and not result.empty:
+            return result, True, None
+        else:
+            # 空数据不算失败，只是没有数据
+            return result, True, None
+            
+    except Exception as e:
+        error_msg = str(e)
+        logger.warning(
+            "[%s] 数据获取失败 ts_code=%s: %s",
+            data_type, ts_code, error_msg
+        )
+        return None, False, error_msg
+
+
 def create_stock_fundamental_fetch_node():
-    """拉取公司基础信息（stock_company）与估值快照（daily_basic）。"""
+    """
+    拉取公司基础信息（stock_company）与估值快照（daily_basic）。
+    
+    改进：各数据类型独立获取，互不影响。一个数据类型失败不会导致其他数据类型无法获取。
+    """
 
     def stock_fundamental_fetch_node(
         state: Dict[str, Any],
@@ -184,7 +223,6 @@ def create_stock_fundamental_fetch_node():
 
         try:
             from dataflow.utils import normalize_cn_ts_code
-
             ts_code = normalize_cn_ts_code(raw_code)
         except ValueError as e:
             return {
@@ -200,33 +238,77 @@ def create_stock_fundamental_fetch_node():
         trade_date = _norm_date(state.get("trade_date"))
         if not trade_date:
             from datetime import datetime
-
             trade_date = datetime.now().strftime("%Y%m%d")
 
+        # 初始化数据存储
         company_info: Dict[str, Any] = {}
         daily_records: List[Dict[str, Any]] = []
         income_records: List[Dict[str, Any]] = []
         cashflow_records: List[Dict[str, Any]] = []
         balancesheet_records: List[Dict[str, Any]] = []
         dividend_records: List[Dict[str, Any]] = []
+        
+        # 记录各数据类型的获取状态
+        fetch_status: Dict[str, Dict[str, Any]] = {
+            "company_info": {"success": False, "error": None, "rows": 0},
+            "valuation": {"success": False, "error": None, "rows": 0},
+            "income": {"success": False, "error": None, "rows": 0},
+            "cashflow": {"success": False, "error": None, "rows": 0},
+            "balancesheet": {"success": False, "error": None, "rows": 0},
+            "dividend": {"success": False, "error": None, "rows": 0},
+        }
+
         try:
             from dataflow.fundamental_data import FundamentalDataFetcher
-
             fetcher = FundamentalDataFetcher()
-            company_df = fetcher.fetch_company_info(
-                ts_code=ts_code,
+        except Exception as e:
+            logger.error("无法初始化 FundamentalDataFetcher: %s", e)
+            return {
+                "ts_code": ts_code,
+                "stock_fundamental_meta": {
+                    "ts_code": ts_code,
+                    "trade_date": trade_date,
+                    "error": f"初始化失败: {e}",
+                    "company_info_ready": False,
+                    "valuation_ready": False,
+                    "income_ready": False,
+                    "cashflow_ready": False,
+                    "balancesheet_ready": False,
+                    "dividend_ready": False,
+                },
+                "stock_company_info": company_info,
+                "stock_fundamental_daily": daily_records,
+                "stock_income_data": income_records,
+                "stock_cashflow_data": cashflow_records,
+                "stock_balancesheet_data": balancesheet_records,
+                "stock_dividend_data": dividend_records,
+            }
+
+        # ===== 1. 获取公司基本信息（独立）=====
+        try:
+            company_df, success, error = _fetch_single_data_type(
+                fetcher, "fetch_company_info", ts_code, "company_info",
                 fields=(
                     "ts_code,com_name,com_id,exchange,chairman,manager,secretary,"
                     "reg_capital,setup_date,province,city,website,email,employees,"
                     "main_business,business_scope"
                 ),
             )
-            if company_df is not None and not company_df.empty:
+            fetch_status["company_info"]["success"] = success
+            fetch_status["company_info"]["error"] = error
+            
+            if success and company_df is not None and not company_df.empty:
                 company_info = dict(company_df.iloc[0].to_dict())
+                fetch_status["company_info"]["rows"] = 1
+        except Exception as e:
+            logger.warning("[company_info] 获取异常 ts_code=%s: %s", ts_code, e)
+            fetch_status["company_info"]["error"] = str(e)
 
+        # ===== 2. 获取估值快照（独立）=====
+        try:
             start_d = date_offset(trade_date, days=120)
-            daily_df = fetcher.fetch_daily_basic(
-                ts_code=ts_code,
+            daily_df, success, error = _fetch_single_data_type(
+                fetcher, "fetch_daily_basic", ts_code, "valuation",
                 start_date=start_d,
                 end_date=trade_date,
                 fields=(
@@ -234,12 +316,21 @@ def create_stock_fundamental_fetch_node():
                     "ps,ps_ttm,dv_ratio,dv_ttm,total_mv,circ_mv"
                 ),
             )
-            if daily_df is not None and not daily_df.empty:
+            fetch_status["valuation"]["success"] = success
+            fetch_status["valuation"]["error"] = error
+            
+            if success and daily_df is not None and not daily_df.empty:
                 daily_df = daily_df.sort_values("trade_date").tail(20)
                 daily_records = to_serializable(daily_df) or []
+                fetch_status["valuation"]["rows"] = len(daily_records)
+        except Exception as e:
+            logger.warning("[valuation] 获取异常 ts_code=%s: %s", ts_code, e)
+            fetch_status["valuation"]["error"] = str(e)
 
-            income_df = fetcher.fetch_income_statement(
-                ts_code=ts_code,
+        # ===== 3. 获取利润表（独立）=====
+        try:
+            income_df, success, error = _fetch_single_data_type(
+                fetcher, "fetch_income_statement", ts_code, "income",
                 fields=(
                     "ts_code,ann_date,f_ann_date,end_date,report_type,comp_type,"
                     "basic_eps,diluted_eps,total_revenue,revenue,total_cogs,oper_cost,"
@@ -247,12 +338,21 @@ def create_stock_fundamental_fetch_node():
                     "income_tax,n_income,n_income_attr_p,ebit,ebitda"
                 ),
             )
-            if income_df is not None and not income_df.empty:
+            fetch_status["income"]["success"] = success
+            fetch_status["income"]["error"] = error
+            
+            if success and income_df is not None and not income_df.empty:
                 income_df = income_df.sort_values("end_date").tail(12)
                 income_records = to_serializable(income_df) or []
+                fetch_status["income"]["rows"] = len(income_records)
+        except Exception as e:
+            logger.warning("[income] 获取异常 ts_code=%s: %s", ts_code, e)
+            fetch_status["income"]["error"] = str(e)
 
-            cashflow_df = fetcher.fetch_cashflow_statement(
-                ts_code=ts_code,
+        # ===== 4. 获取现金流量表（独立）=====
+        try:
+            cashflow_df, success, error = _fetch_single_data_type(
+                fetcher, "fetch_cashflow_statement", ts_code, "cashflow",
                 fields=(
                     "ts_code,ann_date,f_ann_date,end_date,comp_type,report_type,"
                     "net_profit,c_inf_fr_operate_a,st_cash_out_act,n_cashflow_act,"
@@ -263,12 +363,21 @@ def create_stock_fundamental_fetch_node():
                     "c_recp_borrow,c_prepay_amt_borr,c_pay_dist_dpcp_int_exp"
                 ),
             )
-            if cashflow_df is not None and not cashflow_df.empty:
+            fetch_status["cashflow"]["success"] = success
+            fetch_status["cashflow"]["error"] = error
+            
+            if success and cashflow_df is not None and not cashflow_df.empty:
                 cashflow_df = cashflow_df.sort_values("end_date").tail(12)
                 cashflow_records = to_serializable(cashflow_df) or []
+                fetch_status["cashflow"]["rows"] = len(cashflow_records)
+        except Exception as e:
+            logger.warning("[cashflow] 获取异常 ts_code=%s: %s", ts_code, e)
+            fetch_status["cashflow"]["error"] = str(e)
 
-            bs_df = fetcher.fetch_balance_sheet(
-                ts_code=ts_code,
+        # ===== 5. 获取资产负债表（独立）=====
+        try:
+            bs_df, success, error = _fetch_single_data_type(
+                fetcher, "fetch_balance_sheet", ts_code, "balancesheet",
                 fields=(
                     "ts_code,ann_date,f_ann_date,end_date,report_type,comp_type,"
                     "money_cap,accounts_receiv,inventories,total_cur_assets,total_nca,total_assets,"
@@ -277,24 +386,52 @@ def create_stock_fundamental_fetch_node():
                     "contract_liab,lease_liab"
                 ),
             )
-            if bs_df is not None and not bs_df.empty:
+            fetch_status["balancesheet"]["success"] = success
+            fetch_status["balancesheet"]["error"] = error
+            
+            if success and bs_df is not None and not bs_df.empty:
                 bs_df = bs_df.sort_values("end_date").tail(12)
                 balancesheet_records = to_serializable(bs_df) or []
+                fetch_status["balancesheet"]["rows"] = len(balancesheet_records)
+        except Exception as e:
+            logger.warning("[balancesheet] 获取异常 ts_code=%s: %s", ts_code, e)
+            fetch_status["balancesheet"]["error"] = str(e)
 
-            div_df = fetcher.fetch_dividend(
-                ts_code=ts_code,
+        # ===== 6. 获取分红数据（独立）=====
+        try:
+            div_df, success, error = _fetch_single_data_type(
+                fetcher, "fetch_dividend", ts_code, "dividend",
                 fields=(
                     "ts_code,end_date,ann_date,div_proc,stk_div,stk_bo_rate,stk_co_rate,"
                     "cash_div,cash_div_tax,record_date,ex_date,pay_date,div_listdate,"
                     "imp_ann_date,base_date,base_share"
                 ),
             )
-            if div_df is not None and not div_df.empty:
-                # 分红记录较稀疏，保留更多历史
+            fetch_status["dividend"]["success"] = success
+            fetch_status["dividend"]["error"] = error
+            
+            if success and div_df is not None and not div_df.empty:
                 div_df = div_df.sort_values(["end_date", "ann_date"]).tail(20)
                 dividend_records = to_serializable(div_df) or []
+                fetch_status["dividend"]["rows"] = len(dividend_records)
         except Exception as e:
-            logger.warning("基础数据拉取失败 ts_code=%s: %s", ts_code, e)
+            logger.warning("[dividend] 获取异常 ts_code=%s: %s", ts_code, e)
+            fetch_status["dividend"]["error"] = str(e)
+
+        # 记录整体获取情况
+        success_count = sum(1 for s in fetch_status.values() if s["success"])
+        logger.info(
+            "基本面数据获取完成 ts_code=%s: %d/6 类型成功, "
+            "company=%s, valuation=%s, income=%s, cashflow=%s, balance=%s, dividend=%s",
+            ts_code,
+            success_count,
+            fetch_status["company_info"]["rows"],
+            fetch_status["valuation"]["rows"],
+            fetch_status["income"]["rows"],
+            fetch_status["cashflow"]["rows"],
+            fetch_status["balancesheet"]["rows"],
+            fetch_status["dividend"]["rows"]
+        )
 
         return {
             "ts_code": ts_code,
@@ -307,6 +444,9 @@ def create_stock_fundamental_fetch_node():
                 "cashflow_ready": bool(cashflow_records),
                 "balancesheet_ready": bool(balancesheet_records),
                 "dividend_ready": bool(dividend_records),
+                "fetch_status": fetch_status,  # 详细的获取状态
+                "partial_success": success_count > 0 and success_count < 6,  # 标记部分成功
+                "complete_success": success_count == 6,  # 标记完全成功
             },
             "stock_company_info": company_info,
             "stock_fundamental_daily": daily_records,
@@ -1207,8 +1347,10 @@ def create_detect_fundamental_cache_node():
                         "fundamental_cache_path": None,
                     }
 
-                # 检查之前是否分析失败
-                if not reduce_result.get("success", True):
+                # 检查之前是否分析失败（有error字段或success=false都视为失败）
+                has_error = reduce_result.get("error") is not None
+                success_flag = reduce_result.get("success", not has_error)  # 有error时默认失败
+                if not success_flag or has_error:
                     logger.info("fundamental_analyst 缓存标记为失败，重新分析: %s/%s", ts_code, trade_date)
                     return {
                         **state,

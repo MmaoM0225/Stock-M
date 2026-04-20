@@ -12,7 +12,8 @@ import logging
 from .config import DATA_SOURCES
 from .utils import (
     format_date, validate_stock_code,
-    clean_dataframe, DataFlowException
+    clean_dataframe, DataFlowException,
+    with_retry
 )
 
 try:
@@ -157,6 +158,7 @@ class MarketDataFetcher:
             logger.error(f"获取东财个股信息失败: {e}")
             raise DataFlowException(f"获取东财个股信息失败: {e}")
     
+    @with_retry(max_retries=3, retry_on_empty=True)
     def fetch_money_flow(
         self,
         ts_code: str,
@@ -206,6 +208,7 @@ class MarketDataFetcher:
             logger.error(f"获取资金流向失败: {e}")
             raise DataFlowException(f"获取资金流向失败: {e}")
     
+    @with_retry(max_retries=3, retry_on_empty=True)
     def fetch_margin_detail(
         self,
         trade_date: str,
@@ -250,6 +253,7 @@ class MarketDataFetcher:
             logger.error(f"获取融资融券明细失败: {e}")
             raise DataFlowException(f"获取融资融券明细失败: {e}")
     
+    @with_retry(max_retries=3, retry_on_empty=False)
     def fetch_margin_target(self, ts_code: str = None) -> pd.DataFrame:
         """
         获取融资融券标的
@@ -548,6 +552,7 @@ class MarketDataFetcher:
             logger.error(f"获取期货日线行情失败: {e}")
             raise DataFlowException(f"获取期货日线行情失败: {e}")
     
+    @with_retry(max_retries=5, retry_on_empty=True)  # 雅虎接口可能不稳定，更多重试
     def fetch_yahoo_index_daily(
         self,
         symbol: str,
@@ -626,6 +631,7 @@ class MarketDataFetcher:
             logger.error(f"获取雅虎指数行情失败: {e}")
             raise DataFlowException(f"获取雅虎指数行情失败: {e}")
     
+    @with_retry(max_retries=3, retry_on_empty=True)
     def fetch_shibor_lpr(
         self,
         start_date: str,
@@ -1003,6 +1009,7 @@ class MarketDataFetcher:
             logger.error(f"获取备用基础列表失败: {e}")
             raise DataFlowException(f"获取备用基础列表失败: {e}")
 
+    @with_retry(max_retries=3, retry_on_empty=True)
     def fetch_daily_basic(
         self,
         ts_code: str = None,

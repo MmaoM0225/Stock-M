@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -146,15 +147,18 @@ def _load_upstream_payload(
 
 
 def _find_latest_portfolio_book(trade_date: str, decision_root: Optional[Path] = None) -> Optional[Path]:
+    """查找指定日期之前（不含当日）的最新投资组合持仓记录。
+
+    注意：此方法会严格排除 trade_date 当天，只返回之前日期的结果。
+    如需获取当天结果，请直接构造路径检查。
+    """
     root = decision_root or _DEFAULT_PORTFOLIO_DECISION_ARTIFACT_ROOT
-    direct = root / trade_date / "result.json"
-    if direct.exists():
-        return direct
     if not root.exists():
         return None
     dates: List[str] = []
     for p in root.iterdir():
-        if p.is_dir() and p.name.isdigit() and len(p.name) == 8 and p.name <= trade_date:
+        # 严格小于当前日期（不含等于），确保重新跑时基于真实上期持仓
+        if p.is_dir() and p.name.isdigit() and len(p.name) == 8 and p.name < trade_date:
             if (p / "result.json").exists():
                 dates.append(p.name)
     if not dates:
@@ -351,15 +355,28 @@ def _default_operations(state: Dict[str, Any], manager_map: Dict[str, Dict[str, 
         signal = str(sm.get("action_signal") or "").lower()
         score = _to_float(sm.get("overall_score"), 50.0)
         current_w = _pct_to_float(h.get("仓位"))
-        if signal == "buy" and score >= 70:
+
+        # 加仓逻辑：信号为买入且评分较高
+        if signal == "buy" and score >= 65:
             op = "加仓"
-            target_w = min(current_w + 0.03, 0.25)
-        elif signal == "sell" or score < 45:
+            target_w = min(current_w + 0.03, 0.20)  # 最大仓位限制为20%
+        # 补仓逻辑：看好的股票下跌时适当补仓（已有持仓且评分仍不错）
+        elif current_w > 0 and score >= 55 and signal not in ["sell", "strong_sell"]:
+            # 评分尚可但略有下降，小幅度补仓以降低成本
+            op = "加仓"
+            target_w = min(current_w + 0.02, 0.20)  # 小幅度补仓，最大20%
+        # 减仓逻辑：信号为卖出或评分较低，但保留最低仓位不轻易清仓
+        elif signal in ["sell", "strong_sell"] or score < 40:
             op = "减仓"
-            target_w = max(current_w - 0.05, 0.0)
-            if target_w <= 0.01:
+            target_w = max(current_w - 0.05, 0.03)  # 最低保留3%仓位，不轻易清仓
+            # 只有评分极低（<30）且信号为强烈卖出时才清仓
+            if score < 30 and signal == "strong_sell":
                 op = "清仓"
                 target_w = 0.0
+        # 评分略低但仍在可接受范围，轻微减仓但不清仓
+        elif score < 50:
+            op = "减仓"
+            target_w = max(current_w - 0.03, 0.03)  # 最低保留3%仓位
         else:
             op = "持有"
             target_w = current_w
@@ -517,9 +534,20 @@ def _apply_operations_to_table(
 
                 # 处理减仓：如果新计算股数小于原持仓，则为减仓
                 if operation == "减仓" and old_shares > 0 and tradable_shares < old_shares:
-                    shares = tradable_shares
-                    amount = round(shares * open_price, 2)
-                    actual_w = (amount / total_capital) if total_capital > 0 else 0.0
+                    # 判断是否为极小幅减仓：如果剩余股数<=1手或减仓幅度<5%，转为清仓
+                    min_hold_lots = 2  # 最少保留2手（200股），否则直接清仓
+                    reduced_lots = (old_shares - tradable_shares) / lot_size
+                    old_lots = old_shares / lot_size
+                    # 如果减仓后剩余不足2手，或减仓不到1手，或减仓比例<5%，直接清仓
+                    if tradable_shares < min_hold_lots * lot_size or reduced_lots < 1 or (reduced_lots / old_lots < 0.05):
+                        shares = 0
+                        amount = 0.0
+                        actual_w = 0.0
+                        operation = "清仓"  # 转为清仓操作
+                    else:
+                        shares = tradable_shares
+                        amount = round(shares * open_price, 2)
+                        actual_w = (amount / total_capital) if total_capital > 0 else 0.0
                     cost_price = old_cost if old_cost > 0 else open_price  # 减仓后成本价不变
                 elif operation == "加仓" and old_shares > 0 and tradable_shares > old_shares:
                     # 加仓：按旧仓+新增仓做加权成本
@@ -673,12 +701,16 @@ def create_llm_make_decision_node(llm: Any, stock_manager_graph: Any = None):
         else:
             system_msg = """你是组合决策官。目标：生成可执行的调仓动作。
 约束：
-1) 操作仅允许：建仓/加仓/减仓/清仓/持有；
+1) 操作仅允许：建仓/加仓/减仓/清仓/持有；注意：若减仓后剩余持仓不足2手（200股）或减仓幅度小于5%，系统将自动转为清仓处理；
 2) 若是首次建仓（is_first_build=true），优先给建仓；
 3) 每条操作必须给出原因；
 4) 输出严格JSON；
 5) 必须参考 macro_hint.target_position 给出的仓位区间建议（如"20%-40%"），将总仓位控制在建议区间内；
-6) target_weight_pct 为单个资产的目标仓位比例（0-1之间的小数，如0.12表示12%）。"""
+6) target_weight_pct 为单个资产的目标仓位比例（0-1之间的小数，如0.12表示12%）；
+7) 看好的股票下跌时可补仓：对于基本面良好、只是短期下跌的股票，可适当加仓以降低成本；
+8) 严格避免介入技术面长期下跌且无明显反转信号的股票：即使基本面优秀，若股票处于长期下跌趋势（如均线空头排列、创近期新低）且缺乏明确反转信号（如放量阳线、底背离、形态突破等），禁止建仓或加仓，仅可持有或减仓；
+9) 单只股票最大仓位不超过20%（0.20），首次建仓建议5%-15%；
+10) 保持仓位多样性：避免过度集中于少数股票，建议持有3-8只不同股票分散风险，避免单一板块过度集中（单板块不超过30%总仓位）。"""
             human_msg = """输入：
 {payload}
 
@@ -693,34 +725,58 @@ def create_llm_make_decision_node(llm: Any, stock_manager_graph: Any = None):
 注意：
 - 请严格遵循 macro_hint.target_position 的仓位区间建议
 - 所有资产的 target_weight_pct 总和应在建议区间内
-- 首次建仓时分散配置，单只仓位建议 5%至25%
-- 调仓时优先保留基本面优秀的持仓，减持高风险资产"""
+- 首次建仓时分散配置，单只仓位建议 5%至20%（不超过20%上限）
+- 调仓时优先保留基本面优秀的持仓，减持高风险资产；若减仓幅度极小（剩余<2手或减仓<5%），建议直接清仓而非小额减仓
+- 补仓策略：基本面良好的股票短期下跌时，可小幅度加仓（如2%-5%）降低成本；但技术面长期下跌且无明显反转信号（如均线空头排列、创近期新低、缺乏放量阳线/底背离/形态突破等）的股票，即使基本面优秀也禁止介入
+- 严格遵守单只股票最大仓位20%的限制
+- 仓位多样性：建议持有5-10只股票，避免单只股票或单一板块过度集中（单板块不超过40%），通过分散投资降低组合风险"""
             prompt = ChatPromptTemplate.from_messages([("system", system_msg), ("human", human_msg)])
             chain = prompt | llm
-            try:
-                raw = chain.invoke(
-                    {"payload": json.dumps({**context, "manager_insights": manager_map}, ensure_ascii=False, indent=2)},
-                    config={**(config or {}), "run_name": "组合决策重构版"},
-                )
-                data = extract_json_text(raw) or {}
-                operations = _normalize_operations(data, [])
-                if not operations:
-                    raise ValueError("LLM返回为空或格式不符合要求（operations为空）")
-                summary = str(data.get("decision_summary") or "").strip() or "已基于资产组合与候选池生成操作。"
-            except Exception as e:
-                logger.exception("组合决策 LLM 调用失败: %s", e)
+
+            # 带指数退避的LLM调用重试机制
+            max_retries = 3
+            base_delay = 2  # 初始延迟2秒
+            last_exception: Optional[Exception] = None
+            data: Dict[str, Any] = {}
+            operations: List[Dict[str, Any]] = []
+            summary = ""
+
+            for attempt in range(max_retries):
+                try:
+                    raw = chain.invoke(
+                        {"payload": json.dumps({**context, "manager_insights": manager_map}, ensure_ascii=False, indent=2)},
+                        config={**(config or {}), "run_name": f"组合决策重构版-尝试{attempt + 1}"},
+                    )
+                    data = extract_json_text(raw) or {}
+                    operations = _normalize_operations(data, [])
+                    if not operations:
+                        raise ValueError("LLM返回为空或格式不符合要求（operations为空）")
+                    summary = str(data.get("decision_summary") or "").strip() or "已基于资产组合与候选池生成操作。"
+                    logger.info(f"组合决策 LLM 调用成功（尝试 {attempt + 1}/{max_retries}）")
+                    break  # 成功则退出重试循环
+                except Exception as e:
+                    last_exception = e
+                    if attempt < max_retries - 1:
+                        delay = base_delay * (2 ** attempt)  # 指数退避：2, 4, 8秒
+                        logger.warning(f"组合决策 LLM 调用失败（尝试 {attempt + 1}/{max_retries}）: {e}，{delay}秒后重试...")
+                        time.sleep(delay)
+                    else:
+                        logger.exception(f"组合决策 LLM 调用失败（已重试{max_retries}次）: {e}")
+
+            if not operations:
+                # 所有重试都失败，返回错误结果
                 decision_result = {
                     "trade_date": trade_date,
                     "portfolio_table": context.get("portfolio_table") or [],
                     "operation_reason_table": [],
-                    "decision_summary": f"LLM调用失败：{e}",
+                    "decision_summary": f"LLM调用失败（重试{max_retries}次后）: {last_exception}",
                     "meta": {
                         "initial_capital": initial_capital,
                         "total_capital": initial_capital,
                         "source_portfolio_path": state.get("prev_decision_path"),
                         "warnings": [
                             *(state.get("decision_warnings") or []),
-                            f"llm_error: {e}",
+                            f"llm_error: {last_exception}",
                         ],
                         "generated_at": datetime.now().astimezone().isoformat(),
                     },

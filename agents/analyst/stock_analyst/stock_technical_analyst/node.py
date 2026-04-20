@@ -234,7 +234,7 @@ def create_stock_technical_insight_node(llm):
         facts = state.get("stock_technical_facts")
         meta = state.get("stock_technical_meta") or {}
         if not facts or not isinstance(facts, dict):
-            return {"technical_analysis": {"ts_code": meta.get("ts_code"), "error": "无有效技术面事实数据"}}
+            return {"technical_analysis": {"ts_code": meta.get("ts_code"), "success": False, "error": "无有效技术面事实数据"}}
 
         from langchain_core.prompts import ChatPromptTemplate
 
@@ -326,8 +326,10 @@ def create_detect_technical_cache_node():
                         "technical_cache_path": None,
                     }
 
-                # 检查之前是否分析失败
-                if not tech_analysis.get("success", True):
+                # 检查之前是否分析失败（有error字段或无success=false都视为失败）
+                has_error = tech_analysis.get("error") is not None
+                success_flag = tech_analysis.get("success", not has_error)  # 有error时默认失败
+                if not success_flag or has_error:
                     logger.info("technical_analyst 缓存标记为失败，重新分析: %s/%s", ts_code, trade_date)
                     return {
                         **state,

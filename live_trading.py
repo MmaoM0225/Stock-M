@@ -1,5 +1,5 @@
 """
-2025年实盘模拟运行脚本
+实盘模拟运行脚本
 
 每7个交易日运行一次完整的投资决策流程（有严格的依赖顺序）：
 
@@ -25,10 +25,10 @@
 5. Portfolio Decision（组合决策）- 依赖所有上游结果
 
 运行方式:
-    python live_trading_2025.py
-    python live_trading_2025.py --single-date 20250102
-    python live_trading_2025.py --start-date 20250101 --end-date 20251231 --interval 7
-    python live_trading_2025.py --dry-run  # 仅预览交易日历，不实际运行
+    python live_trading.py
+    python live_trading.py --single-date 20250102
+    python live_trading.py --start-date 20250101 --end-date 20251231 --interval 7
+    python live_trading.py --dry-run  # 仅预览交易日历，不实际运行
 """
 
 from __future__ import annotations
@@ -78,7 +78,7 @@ SECTOR_MANAGER_ROOT = Path("data/artifacts/manager/sector_manager")
 STOCK_POOL_MANAGER_ROOT = Path("data/artifacts/manager/stock_pool_manager")
 MACRO_MANAGER_ROOT = Path("data/artifacts/manager/macro_manager")
 STOCK_SCREENER_ROOT = Path("data/artifacts/analyst/stock_analyst/stock_screener")
-PORTFOLIO_DECISION_ROOT = Path("data/artifacts/decision/2025_7d_for_once/portfolio")
+PORTFOLIO_DECISION_ROOT = Path("data/artifacts/decision/2025_7d_for_once_ver1.3/portfolio")
 
 DEFAULT_INITIAL_CAPITAL = 500000.0
 
@@ -167,10 +167,12 @@ def run_macro_manager(
     return result
 
 
-def run_stock_screener(trade_date: str) -> Dict[str, Any]:
-    """运行股票筛选器（无需LLM）"""
+def run_stock_screener(
+    llm: ChatOpenAI, trade_date: str
+) -> Dict[str, Any]:
+    """运行股票筛选器（使用LLM决策板块模板）"""
     logger.info(f"[{trade_date}] 开始运行 Stock Screener...")
-    graph = create_stock_screener_graph()
+    graph = create_stock_screener_graph(llm=llm)
     
     # 筛选条件配置
     criteria = {
@@ -178,6 +180,7 @@ def run_stock_screener(trade_date: str) -> Dict[str, Any]:
         "min_market_cap": 80e8,  # 最小市值80亿
         "exclude_st": True,       # 排除ST股票
         "max_stocks": 12,         # 最多返回12只
+        # "max_price": 800,       # 股价上限预留字段，暂不使用
     }
     
     start = time.perf_counter()
@@ -330,7 +333,7 @@ def run_single_trading_day(
             
             # 1.3 Stock Screener - 依赖 Sector Manager 结果（读取 favored/watchlist 板块）
             if not screener_result_path.exists():
-                run_stock_screener(trade_date)
+                run_stock_screener(llm, trade_date)
             else:
                 logger.info(f"[{trade_date}] Stock Screener 结果已存在，跳过")
             
@@ -361,7 +364,7 @@ def run_single_trading_day(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="2025年实盘模拟 - 每7个交易日运行一次投资决策"
+        description="实盘模拟 - 每7个交易日运行一次投资决策"
     )
     parser.add_argument(
         "--start-date",
@@ -432,7 +435,7 @@ def main():
         sys.exit(1)
     
     logger.info(f"\n{'#'*60}")
-    logger.info(f"# 2025年实盘模拟配置")
+    logger.info(f"# 实盘模拟配置")
     logger.info(f"#{'#'*59}")
     logger.info(f"# 运行区间: {trading_days[0]} - {trading_days[-1]}")
     logger.info(f"# 运行次数: {len(trading_days)} 次")
@@ -536,7 +539,7 @@ def main():
     
     # 最终总结
     logger.info(f"\n{'='*60}")
-    logger.info(f"2025年实盘模拟运行完成")
+    logger.info(f"实盘模拟运行完成")
     logger.info(f"{'='*60}")
     logger.info(f"总交易日: {len(trading_days)}")
     logger.info(f"成功: {completed_count}")

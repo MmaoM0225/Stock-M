@@ -11,7 +11,8 @@ import logging
 from .config import DATA_SOURCES
 from .utils import (
     format_date, validate_stock_code,
-    clean_dataframe, DataFlowException
+    clean_dataframe, DataFlowException,
+    with_retry
 )
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,7 @@ class KLineDataFetcher:
             ts.set_token(DATA_SOURCES['tushare']['token'])
             self.ts_pro = ts.pro_api()
     
+    @with_retry(max_retries=5, retry_on_empty=True)  # K线数据很重要，重试更多次
     def fetch_daily_data(
         self,
         ts_code: str,
@@ -135,6 +137,7 @@ class KLineDataFetcher:
             logger.error(f"获取日线数据失败: {e}")
             raise DataFlowException(f"获取日线数据失败: {e}")
     
+    @with_retry(max_retries=3, retry_on_empty=True)
     def fetch_weekly_data(
         self,
         ts_code: str,
@@ -200,6 +203,7 @@ class KLineDataFetcher:
             logger.error(f"获取周线数据失败: {e}")
             raise DataFlowException(f"获取周线数据失败: {e}")
     
+    @with_retry(max_retries=3, retry_on_empty=True)
     def fetch_monthly_data(
         self,
         ts_code: str,
@@ -265,6 +269,7 @@ class KLineDataFetcher:
             logger.error(f"获取月线数据失败: {e}")
             raise DataFlowException(f"获取月线数据失败: {e}")
     
+    @with_retry(max_retries=3, retry_on_empty=True)
     def fetch_index_daily_data(
         self,
         ts_code: str,
