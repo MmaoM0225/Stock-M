@@ -43,6 +43,9 @@ class ScreenerCriteria:
     min_pb: Optional[float] = None  # 市净率下限
     max_pb: Optional[float] = None  # 市净率上限
 
+    # 股价限制
+    max_price: Optional[float] = None  # 股价上限（避免高价股如茅台）
+
     # 数量与排序
     max_stocks: int = 100
     sort_by: str = "total_mv"  # total_mv, circ_mv, …, dv_ratio, dv_ttm（与 daily_basic 字段一致）
@@ -62,6 +65,7 @@ class ScreenerCriteria:
             max_pe=data.get("max_pe"),
             min_pb=data.get("min_pb"),
             max_pb=data.get("max_pb"),
+            max_price=data.get("max_price"),
             max_stocks=data.get("max_stocks", 100),
             sort_by=data.get("sort_by", "total_mv"),
             sort_order=_normalize_sort_order(data.get("sort_order", "desc")),
@@ -155,6 +159,9 @@ class ScreenerCriteria:
             if self.max_pb is not None:
                 pb_range += f"{self.max_pb}"
             filters.append(f"PB:{pb_range}")
+
+        if self.max_price is not None:
+            filters.append(f"股价≤{self.max_price:.0f}元")
 
         filters.append(f"最多{self.max_stocks}只")
         order_cn = "正序" if self.sort_order == "asc" else "倒序"

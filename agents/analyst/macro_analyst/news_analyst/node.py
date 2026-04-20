@@ -9,7 +9,7 @@ import os
 import json
 import logging
 from typing import Dict, List, Any, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
 from enum import Enum
@@ -95,78 +95,109 @@ class SectorImpacts(BaseModel):
 
 
 def _get_news_sections_by_date(
-    date_str: str, fetcher: Any, news_dir: str = "data/news", _sync_attempted: bool = False
+    date_str: str, finlight_fetcher: Any, use_cache: bool = True
 ) -> tuple:
     """
-    按日期获取新闻 sections，优先从数据库 breakfast_news 表。
-    1. 查 DB：若有 json_file_path 且文件存在，直接读取
-    2. 若有 detail_url：抓取页面，保存到 JSON，更新 DB 的 json_file_path
-    3. 若无 DB 记录且未 sync 过：先 sync_breakfast_news，再重试
+    按日期获取新闻 sections，全面使用 Finlight API。
+
+    获取指定日期的前一天00:00到当天12:00的新闻数据（跨天时间范围）。
+    如果历史日期没有新闻，则回退到获取最新新闻。
+
+    Args:
+        date_str: 日期字符串，格式 YYYYMMDD（指定日期）
+        finlight_fetcher: FinlightDataFetcher 实例
+        use_cache: 是否使用本地缓存
 
     Returns:
-        (sections, source): sections 列表，source 为 "local"（本地）或 "fetch"（远程抓取）
+        (sections, source): sections 列表，source 为 "local"（本地缓存）或 "api"（API 请求）
     """
-    import os
-    from pathlib import Path
+    try:
+        # 解析传入的日期，计算前一天
+        current_date = datetime.strptime(date_str, "%Y%m%d")
+        previous_date = current_date - timedelta(days=1)
 
-    from database import BreakfastNews
-    from database.config import get_db_session
+        # 构建时间范围：前一天00:00 到 当天12:00
+        from_time = previous_date.strftime("%Y-%m-%dT00:00")
+        to_time = current_date.strftime("%Y-%m-%dT12:00")
 
-    json_path = Path(news_dir) / f"news_{date_str}.json"
-    json_path_str = json_path.as_posix()  # 统一使用正斜杠，如 data/news/news_20260309.json
+        logger.info(f"获取 {date_str} 新闻：{from_time} 到 {to_time}")
 
-    with get_db_session() as session:
-        row = session.query(BreakfastNews).filter(BreakfastNews.pub_date == date_str).first()
-        # 在 session 关闭前提取属性，避免 detached instance 错误
-        row_json_path = row.json_file_path if row else None
-        row_detail_url = row.detail_url if row else None
+        # 使用 Finlight API 获取指定时间范围的新闻
+        result = finlight_fetcher.fetch_news_by_time_range(
+            from_=from_time,
+            to=to_time,
+            countries=["CN"],
+            page_size=50,
+            use_cache=use_cache,
+        )
 
-    if row:
-        # 1. 优先从 json_file_path 读取，若无则尝试默认路径 data/news/news_{date}.json
-        for path in [row_json_path, json_path_str]:
-            if path and os.path.exists(path):
-                try:
-                    with open(path, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    sections = data.get("sections", [])
-                    if sections:
-                        if path == json_path_str and not row_json_path:
-                            with get_db_session() as session:
-                                r = session.query(BreakfastNews).filter(BreakfastNews.pub_date == date_str).first()
-                                if r:
-                                    r.json_file_path = json_path_str
-                        return (sections, "local")
-                except Exception as e:
-                    logger.warning(f"读取 JSON 失败 {path}: {e}")
+        # 转换为 sections 格式
+        sections = finlight_fetcher.convert_to_sections_format(result)
 
-        # 2. 有 detail_url 则抓取
-        if row_detail_url and fetcher:
-            try:
-                use_old_format = int(date_str) <= 20250603
-                news_data = fetcher.fetch_eastmoney_news_page(row_detail_url, use_old_format)
-                if news_data and news_data.get("sections"):
-                    json_path.parent.mkdir(parents=True, exist_ok=True)
-                    with open(json_path, "w", encoding="utf-8") as f:
-                        json.dump(news_data, f, ensure_ascii=False, indent=2)
-                    with get_db_session() as session:
-                        r = session.query(BreakfastNews).filter(BreakfastNews.pub_date == date_str).first()
-                        if r:
-                            r.json_file_path = json_path_str
-                    return (news_data.get("sections", []), "fetch")
-            except Exception as e:
-                logger.warning(f"抓取新闻失败: {e}")
-        return ([], "fetch")
+        if sections:
+            # 判断数据来源：检查是否有缓存文件
+            # 缓存文件使用当天日期命名（如 news_20260310.json）
+            cache_dir = "data/news_finlight"
+            cache_file = f"{cache_dir}/news_{date_str}.json"
 
-    # 3. 无 DB 记录，先同步早餐列表再重试（仅尝试一次，避免死循环）
-    if not _sync_attempted:
-        try:
-            from database.data_sync.breakfast_news import sync_breakfast_news
-            sync_breakfast_news()
-            return _get_news_sections_by_date(date_str, fetcher, news_dir, _sync_attempted=True)
-        except Exception as e:
-            logger.warning(f"同步财经早餐失败: {e}")
+            import os
+            source = "local" if os.path.exists(cache_file) and use_cache else "api"
 
-    return ([], "fetch")
+            prev_date_str = previous_date.strftime("%Y%m%d")
+            logger.info(f"获取 {date_str} 新闻成功（{prev_date_str}00:00到{date_str}12:00），共 {len(sections)} 条 section（来源: {source}）")
+            return (sections, source)
+        else:
+            # 历史日期没有新闻，回退到获取最新新闻
+            logger.warning(f"历史日期 {date_str} 无新闻，回退到获取最新新闻")
+            return _get_news_sections_latest(finlight_fetcher, use_cache=use_cache)
+
+    except Exception as e:
+        logger.warning(f"获取新闻失败: {e}，回退到获取最新新闻")
+        import traceback
+        logger.debug(traceback.format_exc())
+        # 出错时回退到获取最新新闻
+        return _get_news_sections_latest(finlight_fetcher, use_cache=use_cache)
+
+
+def _get_news_sections_latest(
+    finlight_fetcher: Any, 
+    use_cache: bool = True,
+    page_size: int = 50
+) -> tuple:
+    """
+    获取最新新闻 sections（不指定日期，获取最近的新闻）
+    
+    Args:
+        finlight_fetcher: FinlightDataFetcher 实例
+        use_cache: 是否使用本地缓存
+        page_size: 获取新闻数量
+        
+    Returns:
+        (sections, source): sections 列表
+    """
+    try:
+        # 使用 Finlight API 获取最新中国新闻
+        result = finlight_fetcher.fetch_articles(
+            query="country:CN",
+            page_size=page_size,
+            use_cache=use_cache,
+        )
+        
+        # 转换为 sections 格式
+        sections = finlight_fetcher.convert_to_sections_format(result)
+        
+        if sections:
+            logger.info(f"获取最新新闻成功，共 {len(sections)} 条 section")
+            return (sections, "api")
+        else:
+            logger.warning("获取最新新闻为空")
+            return ([], "api")
+            
+    except Exception as e:
+        logger.warning(f"获取最新新闻失败: {e}")
+        import traceback
+        logger.debug(traceback.format_exc())
+        return ([], "api")
 
 
 def _get_industry_and_concept_lists() -> tuple:
@@ -214,19 +245,27 @@ def _get_industry_and_concept_lists() -> tuple:
     return industry_list, concept_list
 
 
-def create_news_fetch_node(fetcher: Optional[Any] = None):
+def create_news_fetch_node(finlight_fetcher: Optional[Any] = None):
     """
-    构建新闻获取节点。
+    构建新闻获取节点（全面使用 Finlight API）。
 
     流程：
     1. 判断 trade_date 是否为交易日，否则返回空 sections 结束图
-    2. 从数据库 breakfast_news 表获取新闻：优先 json_file_path，无则按 detail_url 抓取
+    2. 从 Finlight API 获取新闻（优先本地缓存）
     3. 获取完整行业列表与同花顺概念列表（DB 优先，否则 dataflow）
     4. 输出 sections、all_industries、ths_concept_list 供 extract / reduce 节点使用
 
     Args:
-        fetcher: NewsSentimentFetcher，用于远程抓取新闻详情（必须提供）
+        finlight_fetcher: FinlightDataFetcher 实例（可选，如未提供则自动创建）
     """
+    # 自动创建 fetcher（如果未提供）
+    if finlight_fetcher is None:
+        try:
+            from dataflow.finlight_data import FinlightDataFetcher
+            finlight_fetcher = FinlightDataFetcher()
+            logger.info("自动创建 FinlightDataFetcher 实例")
+        except Exception as e:
+            logger.warning(f"自动创建 FinlightDataFetcher 失败: {e}")
 
     def news_fetch_node(state):
         current_date = state.get("trade_date", datetime.now().strftime("%Y%m%d"))
@@ -240,23 +279,31 @@ def create_news_fetch_node(fetcher: Optional[Any] = None):
                 "news_sections": [],
             }
 
-        # 2. 需要 fetcher 来抓取新闻（当 DB 无 json_file_path 时）
-        if fetcher is None:
-            logger.warning("未提供 fetcher，无法抓取新闻")
+        # 2. 检查 fetcher
+        if finlight_fetcher is None:
+            logger.warning("未提供 finlight_fetcher，无法获取新闻")
             return {
                 "messages": [{"type": "skip", "reason": "未配置 fetcher", "trade_date": current_date}],
                 "trade_date": current_date,
                 "news_sections": [],
             }
 
-        # 3. 从数据库获取新闻 sections（DB 优先，json_file_path -> detail_url 抓取）
+        # 3. 从 Finlight API 获取新闻（优先本地缓存）
         try:
-            sections, news_source = _get_news_sections_by_date(current_date, fetcher)
-            if sections:
-                logger.info(f"获取 {current_date} 新闻成功，共 {len(sections)} 条 section（来源: {'本地' if news_source == 'local' else '远程抓取'}）")
+            # 判断是否为今日，如果是则获取最新新闻（不限定日期）
+            today = datetime.now().strftime("%Y%m%d")
+            if current_date == today:
+                # 获取最新新闻（不限定具体日期）
+                logger.info(f"获取今日最新新闻: {current_date}")
+                sections, news_source = _get_news_sections_latest(finlight_fetcher, use_cache=True)
+            else:
+                # 获取指定日期的新闻
+                sections, news_source = _get_news_sections_by_date(current_date, finlight_fetcher, use_cache=True)
         except Exception as e:
             logger.warning(f"获取新闻失败: {e}")
-            sections, news_source = [], "fetch"
+            import traceback
+            logger.debug(traceback.format_exc())
+            sections, news_source = [], "api"
 
         if not sections:
             return {
@@ -335,6 +382,11 @@ def create_news_extract_node(llm):
         system_message = (
             "您是一位专业的金融新闻分析师。您的任务是分析新闻内容，提取关键信息，"
             "包括新闻来源、事件类型、影响行业、情绪倾向、影响等级等。\n\n"
+            "【语言要求】\n"
+            "新闻内容可能是英文，但您的分析结果必须用中文输出。\n"
+            "- summary（事件摘要）必须是中文\n"
+            "- source（新闻来源）可以保留原文或使用中文名\n"
+            "- 其他字段保持英文枚举值\n\n"
             "请按照以下要求进行分析，并返回严格的 JSON 格式结构化结果（不要输出多余文字）：\n\n"
             "【必需字段】\n"
             "1. source: 新闻来源（如：东方财富、新浪财经、财联社等，如果无法确定则填\"未知\"）\n"
@@ -346,8 +398,8 @@ def create_news_extract_node(llm):
             "   - industry: 行业动态\n"
             "   - market: 市场行情\n"
             "   - other: 其他\n"
-            "3. summary: 事件摘要（简明扼要，不超过30字）\n"
-            "4. industry: 行业标签列表（如：['银行业', '金融业']，至少包含一个行业标签）\n"
+            "3. summary: 事件摘要（简明扼要，不超过30字，必须用中文）\n"
+            "4. industry: 行业标签列表（如：['银行业', '金融业']，至少包含一个行业标签，必须用中文）\n"
             "5. sentiment: 情绪倾向，必须是以下之一：\n"
             "   - positive: 正面利好\n"
             "   - negative: 负面利空\n"
@@ -358,7 +410,8 @@ def create_news_extract_node(llm):
             "- event_type 必须使用指定的英文枚举值\n"
             "- sentiment 必须使用指定的英文枚举值\n"
             "- impact_level 必须是 1-5 的整数\n"
-            "- industry 必须是列表格式\n"
+            "- industry 必须是列表格式，且使用中文\n"
+            "- summary 必须是中文\n"
             "- 只输出一段 JSON，不能有任何解释或多余文本"
             + industry_info
         )
@@ -423,15 +476,20 @@ def create_news_reduce_node(llm):
         
         system_message = (
             "您是一位资深的市场分析师。基于以下事件列表，请分析各板块的影响和宏观环境。\n\n"
+            "【语言要求】\n"
+            "输入的事件列表可能是英文，但您的分析结果必须用中文输出。\n"
+            "- sector_impacts 中的 key 必须从下方【行业列表】或【概念列表】中选取（使用中文）\n"
+            "- reason（影响原因）必须用中文描述\n"
+            "- 其他字段保持英文枚举值\n\n"
             "请返回严格的 JSON 结构化结果，包含以下两部分：\n\n"
             "【板块影响分析 sector_impacts】\n"
-            "字典结构，key 必须从下方提供的【行业列表】或【概念列表】中选取（行业板块与概念板块均可），value 为对象，包含：\n"
+            "字典结构，key 必须从下方提供的【行业列表】或【概念列表】中选取（行业板块与概念板块均可，必须使用中文），value 为对象，包含：\n"
             "- sentiment: 板块情绪 (bullish/bearish/neutral)\n"
             "  - bullish: 看涨，预期上涨\n"
             "  - bearish: 看跌，预期下跌\n"
             "  - neutral: 中性，无明显趋势\n"
             "- confidence: 置信度 (0-1)\n"
-            "- reason: 影响原因列表\n\n"
+            "- reason: 影响原因列表（必须用中文描述）\n\n"
             "【宏观环境评估 macro_environment】\n"
             "对象结构，包含以下四个字段：\n"
             "- liquidity: 流动性 (tight/neutral/loose)\n"
@@ -445,7 +503,8 @@ def create_news_reduce_node(llm):
             "- global_risk: 全球风险 (low/medium/high)\n"
             "- market_sentiment: 市场情绪 (bullish/bearish/neutral)\n\n"
             "【重要要求】\n"
-            "- sector_impacts 中的 key 必须从下方「行业列表」或「概念列表」中选取，不能自造名称；\n"
+            "- sector_impacts 中的 key 必须从下方「行业列表」或「概念列表」中选取，不能自造名称，且必须使用中文；\n"
+            "- reason 字段必须用中文描述；\n"
             "- 至少输出 3 个有代表性的板块影响（可混合行业与概念）；\n"
             "- 只输出一段 JSON，不能有任何解释文字。"
         )

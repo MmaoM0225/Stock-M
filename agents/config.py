@@ -21,7 +21,7 @@ class LLMConfig:
     
     def __init__(self, 
                  provider: str = 'siliconflow',
-                 model: str = 'Pro/MiniMaxAI/MiniMax-M2.5',
+                 model: str = 'Pro/deepseek-ai/DeepSeek-V3.2',
                  base_url: str = None,
                  temperature: float = 0.0,
                  max_retries: int = 3,
@@ -45,7 +45,7 @@ class LLMConfig:
         self.max_retries = max_retries
         # 允许通过环境变量覆盖：LLM_TIMEOUT=90
         env_timeout = os.getenv("LLM_TIMEOUT")
-        self.timeout = timeout if timeout is not None else int(env_timeout) if env_timeout else 90
+        self.timeout = timeout if timeout is not None else int(env_timeout) if env_timeout else 150
     
     def _get_api_key(self, provider: str) -> str:
         """
@@ -145,7 +145,7 @@ MACRO_MANAGER_MAX_CONCURRENT_SUBGRAPHS = 2
 # 行业管理器配置：同时运行的分析师子图数量上限
 SECTOR_MANAGER_MAX_CONCURRENT_SUBGRAPHS = 2
 # 个股池管理器：同时分析的股票只数上限（每只股票内部仍会并行跑基本面+技术面）
-STOCK_POOL_MANAGER_MAX_CONCURRENT_STOCKS = 3
+STOCK_POOL_MANAGER_MAX_CONCURRENT_STOCKS = 2
 # 宏观经济分析师配置
 MACRO_USE_US_STOCK_TREND = False  # 是否纳入美股趋势分析
 # 国内市场分析默认指数：指数名称、指数代码、指数描述
@@ -179,8 +179,9 @@ MACRO_DEFAULT_INDEX_CODES = [
         "description": "深交所创业板最具代表性的100只股票，反映成长型公司整体表现",
     },
 ]
-# 大宗商品：name、code、description、source。source 区分数据源，合约代码需要及时更新
+# 大宗商品：name、code、description、source。source 区分数据源
 # source: "sge" 上海黄金交易所现货 -> fetch_sge_daily；"fut" 期货 -> fetch_fut_daily
+# 连续合约格式：symbol.exchange，交易所代码保持原始标识（INE/DCE/SHF/ZCE）
 MACRO_DEFAULT_COMMODITY_CODES = [
     {
         "name": "黄金",
@@ -189,33 +190,57 @@ MACRO_DEFAULT_COMMODITY_CODES = [
         "source": "sge",
     },
     {
-        "name": "原油",
-        "code": "SC2604.INE",
-        "description": "INE 原油期货主力合约，能源价格、全球供需与地缘局势",
+        "name": "原油连续",
+        "code": "SCL.INE",
+        "description": "INE 原油期货连续合约，能源价格、全球供需与地缘局势",
         "source": "fut",
     },
     {
-        "name": "铜",
-        "code": "CU2604.SHF",
-        "description": "沪铜期货，工业金属代表，经济景气度指标",
+        "name": "生猪连续",
+        "code": "LHL.DCE",
+        "description": "DCE 生猪期货连续合约，农产品价格、消费与通胀指标",
         "source": "fut",
     },
     {
-        "name": "螺纹钢",
-        "code": "RB2604.SHF",
-        "description": "上期所螺纹钢期货，基建、地产、建筑活动指标",
+        "name": "螺纹钢连续",
+        "code": "RBL.SHF",
+        "description": "SHFE 螺纹钢期货连续合约，基建、地产、建筑活动指标",
         "source": "fut",
     },
     {
-        "name": "白银",
-        "code": "AG2606.SHF",
-        "description": "沪银期货，贵金属，与黄金联动、通胀预期",
+        "name": "豆粕连续",
+        "code": "ML.DCE",
+        "description": "DCE 豆粕期货连续合约，饲料原料、农业产业链指标",
         "source": "fut",
     },
     {
-        "name": "铁矿石",
-        "code": "I2605.DCE",
-        "description": "大商所铁矿石期货，钢铁、基建投资需求",
+        "name": "焦炭连续",
+        "code": "JL.DCE",
+        "description": "DCE 焦炭期货连续合约，钢铁上游、工业原材料指标",
+        "source": "fut",
+    },
+    {
+        "name": "烧碱连续",
+        "code": "SHL.ZCE",
+        "description": "CZCE 烧碱期货连续合约，化工基础原料、工业需求指标",
+        "source": "fut",
+    },
+    {
+        "name": "沪铜连续",
+        "code": "CUL.SHF",
+        "description": "SHFE 沪铜期货连续合约，全球工业景气度、制造业晴雨表",
+        "source": "fut",
+    },
+    {
+        "name": "沪铝连续",
+        "code": "ALL.SHF",
+        "description": "SHFE 沪铝期货连续合约，地产竣工、电力、新能源产业链指标",
+        "source": "fut",
+    },
+    {
+        "name": "棉花连续",
+        "code": "CFL.ZCE",
+        "description": "CZCE 棉花期货连续合约，纺织服装产业链、出口订单景气度",
         "source": "fut",
     },
 ]

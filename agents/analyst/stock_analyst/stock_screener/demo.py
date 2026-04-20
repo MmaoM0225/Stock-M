@@ -16,9 +16,18 @@ Stock Screener（股票筛选分析师）Demo
 import argparse
 import logging
 import re
+import sys
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional
 
+from langchain_openai import ChatOpenAI
+
+# 添加项目根目录到路径
+project_root = Path(__file__).parent.parent.parent.parent.parent
+sys.path.insert(0, str(project_root))
+
+from agents.config import get_llm_config, validate_config
 from .graph import create_stock_screener_graph
 
 
@@ -48,13 +57,24 @@ def main():
     parser.add_argument("date", nargs="?", help="交易日期 YYYYMMDD")
     args = parser.parse_args()
 
+    # 初始化 LLM
+    try:
+        validate_config()
+        llm_config = get_llm_config()
+        llm = ChatOpenAI(**llm_config)
+        print("LLM 配置成功，将使用 AI 决策板块模板")
+    except Exception as e:
+        print(f"LLM 配置失败: {e}")
+        print("将使用默认平衡模板（无 LLM）")
+        llm = None
+
     target_date = _parse_trade_date(args.date) if args.date else None
     trade_date = _resolve_trade_date(target_date)
 
     print(f"交易日 {trade_date}，运行 Stock Screener...")
     print("-" * 60)
 
-    graph = create_stock_screener_graph()
+    graph = create_stock_screener_graph(llm=llm)
 
     # ========== 筛选条件示例 ==========
     # 示例1: 使用 sector_manager 动态板块（推荐；由筛选模板决策节点自动选择每板块策略）
@@ -62,7 +82,8 @@ def main():
         "trade_date": trade_date,
         "min_market_cap": 80e8,  # 统一底线约束；具体板块可被模板细化
         "exclude_st": True,
-        "max_stocks": 20,
+        "max_stocks": 12,
+        # "max_price": 800,  # 股价上限预留字段，暂不使用
     }
 
 

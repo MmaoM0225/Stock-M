@@ -70,6 +70,7 @@ def create_liquidity_fetch_node(market_fetcher=None):
                 logger.warning("fetch_sf_month 失败: %s", e)
 
         return {
+            "trade_date": trade_date,
             "liquidity_lpr_data": to_serializable(lpr_data),
             "liquidity_m2_data": to_serializable(m2_data),
             "liquidity_sf_data": to_serializable(sf_data),
@@ -108,9 +109,11 @@ def create_liquidity_analysis_node(llm=None):
         lpr = state.get("liquidity_lpr_data")
         m2 = state.get("liquidity_m2_data")
         sf = state.get("liquidity_sf_data")
+        trade_date = state.get("trade_date") or datetime.now().strftime("%Y%m%d")
 
         if not lpr and not m2 and not sf:
             return {
+                "trade_date": trade_date,
                 "liquidity_analyst_summary": {
                     **_LIQUIDITY_ANALYST_DEFAULT,
                     "liquidity_summary": "数据缺失",
@@ -167,7 +170,7 @@ M2（月度）:
         data = extract_json_text(raw)
         for k, v in _LIQUIDITY_ANALYST_DEFAULT.items():
             data.setdefault(k, v)
-        return {"liquidity_analyst_summary": data}
+        return {"trade_date": trade_date, "liquidity_analyst_summary": data}
 
     return liquidity_analysis_node
 

@@ -5,11 +5,12 @@ import time
 import asyncio
 import aiohttp
 import pandas as pd
-from typing import Dict, Any, Optional, List, Union
+from typing import Dict, Any, Optional, List, Union, Callable, Tuple
 from datetime import datetime, date
+from functools import wraps
 import logging
 
-from .config import TECHNICAL_INDICATORS_CONFIG
+from .config import TECHNICAL_INDICATORS_CONFIG, MAX_RETRIES, RETRY_DELAY
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,199 @@ logger = logging.getLogger(__name__)
 class DataFlowException(Exception):
     """数据流异常"""
     pass
+
+
+class RetryExhaustedException(DataFlowException):
+    """重试次数耗尽异常"""
+    def __init__(self, message: str, last_error: Optional[Exception] = None):
+        super().__init__(message)
+        self.last_error = last_error
+
+
+def with_retry(
+    max_retries: int = None,
+    delay: float = None,
+    backoff: bool = True,
+    jitter: bool = True,
+    retry_on_empty: bool = False,
+    empty_result_checker: Optional[Callable] = None
+):
+    """
+    数据获取重试装饰器，支持指数退避和抖动
+    
+    Args:
+        max_retries: 最大重试次数，默认使用配置文件中的 MAX_RETRIES
+        delay: 初始延迟秒数，默认使用配置文件中的 RETRY_DELAY
+        backoff: 是否使用指数退避（每次重试延迟翻倍）
+        jitter: 是否添加随机抖动（避免所有请求同时重试）
+        retry_on_empty: 当返回结果为空时是否重试
+        empty_result_checker: 自定义空结果检查函数，接收返回值，返回True表示为空
+    
+    Example:
+        @with_retry(max_retries=5)
+        def fetch_data(ts_code: str) -> pd.DataFrame:
+            return api.get_data(ts_code)
+    """
+    max_retries = max_retries or MAX_RETRIES
+    delay = delay or RETRY_DELAY
+    
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        def wrapper(*args, **kwargs) -> Any:
+            last_error = None
+            
+            for attempt in range(max_retries):
+                try:
+                    result = func(*args, **kwargs)
+                    
+                    # 检查是否返回空结果
+                    is_empty = False
+                    if retry_on_empty:
+                        if empty_result_checker:
+                            is_empty = empty_result_checker(result)
+                        elif result is None:
+                            is_empty = True
+                        elif hasattr(result, 'empty') and result.empty:
+                            is_empty = True
+                        elif hasattr(result, '__len__') and len(result) == 0:
+                            is_empty = True
+                    
+                    if is_empty and attempt < max_retries - 1:
+                        wait_time = delay * (2 ** attempt) if backoff else delay
+                        if jitter:
+                            import random
+                            wait_time += random.uniform(0, 0.5)
+                        
+                        logger.warning(
+                            f"{func.__name__} 返回空结果，将在 {wait_time:.2f}s 后重试 "
+                            f"({attempt + 1}/{max_retries})"
+                        )
+                        time.sleep(wait_time)
+                        continue
+                    
+                    return result
+                    
+                except Exception as e:
+                    last_error = e
+                    error_msg = str(e).lower()
+                    
+                    # 判断是否为可重试的错误
+                    # 不可重试的错误：认证失败、无效参数、权限不足
+                    non_retryable_keywords = [
+                        'auth', 'token', 'permission', 'invalid', 'unauthorized',
+                        '认证', '权限', '无效', 'unauthorized'
+                    ]
+                    
+                    is_non_retryable = any(kw in error_msg for kw in non_retryable_keywords)
+                    
+                    if is_non_retryable:
+                        logger.error(f"{func.__name__} 遇到不可重试错误: {e}")
+                        raise
+                    
+                    if attempt < max_retries - 1:
+                        wait_time = delay * (2 ** attempt) if backoff else delay
+                        if jitter:
+                            import random
+                            wait_time += random.uniform(0, 0.5)
+                        
+                        logger.warning(
+                            f"{func.__name__} 失败: {e}，将在 {wait_time:.2f}s 后重试 "
+                            f"({attempt + 1}/{max_retries})"
+                        )
+                        time.sleep(wait_time)
+                    else:
+                        logger.error(
+                            f"{func.__name__} 在 {max_retries} 次尝试后仍然失败: {e}"
+                        )
+            
+            # 所有重试都失败了
+            raise RetryExhaustedException(
+                f"{func.__name__} 重试 {max_retries} 次后仍然失败",
+                last_error=last_error
+            )
+        
+        return wrapper
+    return decorator
+
+
+def with_retry_and_fallback(
+    fallback_func: Optional[Callable] = None,
+    max_retries: int = None,
+    delay: float = None,
+    return_default_on_failure: Any = None
+):
+    """
+    带降级功能的数据获取重试装饰器
+    
+    当所有重试都失败时，可以选择：
+    1. 调用降级函数 fallback_func
+    2. 返回默认值 return_default_on_failure
+    
+    Args:
+        fallback_func: 降级函数，在主函数失败后被调用
+        max_retries: 最大重试次数
+        delay: 初始延迟秒数
+        return_default_on_failure: 所有重试失败后的默认返回值
+    
+    Example:
+        @with_retry_and_fallback(
+            fallback_func=lambda ts_code: load_from_cache(ts_code),
+            return_default_on_failure=pd.DataFrame()
+        )
+        def fetch_company_info(ts_code: str) -> pd.DataFrame:
+            return api.get_company(ts_code)
+    """
+    max_retries = max_retries or MAX_RETRIES
+    delay = delay or RETRY_DELAY
+    
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        def wrapper(*args, **kwargs) -> Any:
+            last_error = None
+            
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_error = e
+                    error_msg = str(e).lower()
+                    
+                    # 不可重试的错误
+                    non_retryable_keywords = ['auth', 'token', 'permission', 'invalid', '认证', '权限']
+                    if any(kw in error_msg for kw in non_retryable_keywords):
+                        break
+                    
+                    if attempt < max_retries - 1:
+                        wait_time = delay * (2 ** attempt)
+                        logger.warning(
+                            f"{func.__name__} 失败: {e}，将在 {wait_time:.2f}s 后重试 "
+                            f"({attempt + 1}/{max_retries})"
+                        )
+                        time.sleep(wait_time)
+                    else:
+                        logger.error(f"{func.__name__} 在 {max_retries} 次尝试后仍然失败: {e}")
+            
+            # 尝试降级
+            if fallback_func:
+                try:
+                    logger.info(f"{func.__name__} 尝试调用降级函数")
+                    return fallback_func(*args, **kwargs)
+                except Exception as fallback_error:
+                    logger.error(f"降级函数也失败了: {fallback_error}")
+            
+            # 返回默认值
+            if return_default_on_failure is not None:
+                logger.info(f"{func.__name__} 返回默认值")
+                return return_default_on_failure
+            
+            # 无法降级，抛出异常
+            raise RetryExhaustedException(
+                f"{func.__name__} 重试 {max_retries} 次且降级失败",
+                last_error=last_error
+            )
+        
+        return wrapper
+    return decorator
 
 
 def format_date(date_input: Any, format_type: str = 'tushare') -> str:

@@ -115,11 +115,28 @@ def _analyze_one_stock(
     try:
         invoke_input: Dict[str, Any] = {"ts_code": ts_code, "trade_date": trade_date}
         result = stock_manager_graph.invoke(invoke_input)
+
+        # 检查 stock_manager 的持久化状态
+        cache_hit = result.get("stock_manager_cache_hit", False)
+        persisted = result.get("stock_manager_persisted", False)
+        result_path = result.get("stock_manager_result_path")
+
+        if cache_hit:
+            logger.debug("stock_manager 缓存命中: %s/%s", ts_code, trade_date)
+        elif persisted:
+            logger.debug("stock_manager 结果已持久化: %s", result_path)
+        else:
+            persist_reason = result.get("stock_manager_persist_reason", "unknown")
+            logger.warning("stock_manager 未持久化: %s/%s, 原因: %s", ts_code, trade_date, persist_reason)
+
         return {
             **base,
             "fundamental_reduce_result": result.get("fundamental_reduce_result"),
             "technical_analysis": result.get("technical_analysis"),
             "stock_manager_summary": result.get("stock_manager_summary"),
+            "stock_manager_cache_hit": cache_hit,
+            "stock_manager_persisted": persisted,
+            "stock_manager_result_path": result_path,
             "error": None,
         }
     except Exception as e:
@@ -129,6 +146,9 @@ def _analyze_one_stock(
             "fundamental_reduce_result": None,
             "technical_analysis": None,
             "stock_manager_summary": None,
+            "stock_manager_cache_hit": False,
+            "stock_manager_persisted": False,
+            "stock_manager_result_path": None,
             "error": str(e),
         }
 
@@ -213,7 +233,16 @@ def create_pool_reduce_node():
         candidate_stocks.sort(key=_cand_sort_key, reverse=True)
         top_stocks = candidate_stocks[:10]
 
-        ok = sum(1 for a in analyses if not a.get("error"))
+        # 统计成功：既要没有error，又要有stock_manager_summary且success为true
+        def _is_success(a: Dict[str, Any]) -> bool:
+            if a.get("error"):
+                return False
+            sm = a.get("stock_manager_summary")
+            if not isinstance(sm, dict):
+                return False
+            return bool(sm.get("success", False))
+
+        ok = sum(1 for a in analyses if _is_success(a))
         err_n = len(analyses) - ok
         if pool_err:
             summary_text = f"未执行分析：{pool_err}"

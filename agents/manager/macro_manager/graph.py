@@ -49,14 +49,19 @@ def create_macro_manager_graph(
     from agents.analyst.macro_analyst.commodity_analyst.graph import create_commodity_analyst_graph
     from agents.analyst.macro_analyst.macro_economist.graph import create_macro_economist_graph
 
-    if news_fetcher is None:
+    # 获取 FinlightDataFetcher 供 news_analyst 使用
+    finlight_fetcher = None
+    if news_fetcher is not None:
+        # 从 NewsSentimentFetcher 中提取底层的 FinlightDataFetcher
+        finlight_fetcher = getattr(news_fetcher, "finlight_fetcher", None)
+    if finlight_fetcher is None:
         try:
-            from dataflow.news_sentiment import NewsSentimentFetcher
-            news_fetcher = NewsSentimentFetcher()
+            from dataflow.finlight_data import FinlightDataFetcher
+            finlight_fetcher = FinlightDataFetcher()
         except Exception:
-            news_fetcher = None
+            finlight_fetcher = None
 
-    news_graph = create_news_graph(llm, news_fetcher)
+    news_graph = create_news_graph(llm, finlight_fetcher)
     market_sentiment_graph = create_market_sentiment_analyst_graph(llm=llm)
     liquidity_graph = create_liquidity_analyst_graph(llm=llm)
     commodity_graph = create_commodity_analyst_graph(llm=llm)
