@@ -99,53 +99,64 @@ def _get_news_sections_by_date(
 ) -> tuple:
     """
     按日期获取新闻 sections，全面使用 Finlight API。
-    
-    获取昨日00:00到今日12:00的新闻数据（跨天时间范围）。
-    
+
+    获取指定日期的前一天00:00到当天12:00的新闻数据（跨天时间范围）。
+    如果历史日期没有新闻，则回退到获取最新新闻。
+
     Args:
-        date_str: 日期字符串，格式 YYYYMMDD（用于缓存标识）
+        date_str: 日期字符串，格式 YYYYMMDD（指定日期）
         finlight_fetcher: FinlightDataFetcher 实例
         use_cache: 是否使用本地缓存
-        
+
     Returns:
         (sections, source): sections 列表，source 为 "local"（本地缓存）或 "api"（API 请求）
     """
     try:
-        # 使用 Finlight API 获取时间范围新闻（昨日00:00到今日12:00）
-        result = finlight_fetcher.fetch_yesterday_to_today_news(
-            end_hour=12,  # 今日中午12点
+        # 解析传入的日期，计算前一天
+        current_date = datetime.strptime(date_str, "%Y%m%d")
+        previous_date = current_date - timedelta(days=1)
+
+        # 构建时间范围：前一天00:00 到 当天12:00
+        from_time = previous_date.strftime("%Y-%m-%dT00:00")
+        to_time = current_date.strftime("%Y-%m-%dT12:00")
+
+        logger.info(f"获取 {date_str} 新闻：{from_time} 到 {to_time}")
+
+        # 使用 Finlight API 获取指定时间范围的新闻
+        result = finlight_fetcher.fetch_news_by_time_range(
+            from_=from_time,
+            to=to_time,
             countries=["CN"],
             page_size=50,
             use_cache=use_cache,
         )
-        
+
         # 转换为 sections 格式
         sections = finlight_fetcher.convert_to_sections_format(result)
-        
+
         if sections:
             # 判断数据来源：检查是否有缓存文件
+            # 缓存文件使用当天日期命名（如 news_20260310.json）
             cache_dir = "data/news_finlight"
-            
-            today = datetime.now()
-            yesterday = today - timedelta(days=1)
-            from_date = yesterday.strftime("%Y%m%d")
-            to_date = today.strftime("%Y%m%d")
-            cache_file = f"{cache_dir}/news_{from_date}_{to_date}.json"
-            
+            cache_file = f"{cache_dir}/news_{date_str}.json"
+
             import os
             source = "local" if os.path.exists(cache_file) and use_cache else "api"
-            
-            logger.info(f"获取 {date_str} 新闻成功（昨日00:00到今日12:00），共 {len(sections)} 条 section（来源: {source}）")
+
+            prev_date_str = previous_date.strftime("%Y%m%d")
+            logger.info(f"获取 {date_str} 新闻成功（{prev_date_str}00:00到{date_str}12:00），共 {len(sections)} 条 section（来源: {source}）")
             return (sections, source)
         else:
-            logger.warning(f"获取 {date_str} 新闻为空")
-            return ([], "api")
-            
+            # 历史日期没有新闻，回退到获取最新新闻
+            logger.warning(f"历史日期 {date_str} 无新闻，回退到获取最新新闻")
+            return _get_news_sections_latest(finlight_fetcher, use_cache=use_cache)
+
     except Exception as e:
-        logger.warning(f"获取新闻失败: {e}")
+        logger.warning(f"获取新闻失败: {e}，回退到获取最新新闻")
         import traceback
         logger.debug(traceback.format_exc())
-        return ([], "api")
+        # 出错时回退到获取最新新闻
+        return _get_news_sections_latest(finlight_fetcher, use_cache=use_cache)
 
 
 def _get_news_sections_latest(

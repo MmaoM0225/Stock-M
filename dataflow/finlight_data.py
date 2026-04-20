@@ -136,8 +136,10 @@ class FinlightDataFetcher:
                 params_dict["to"] = to
             
             params = GetArticlesParams(**params_dict)
-            
-            logger.info(f"正在请求 Finlight API: query={query}, page={page}")
+
+            # 记录完整请求参数用于调试
+            log_params = {k: v for k, v in params_dict.items() if v is not None}
+            logger.info(f"正在请求 Finlight API: {log_params}")
             
             response = client.articles.fetch_articles(params=params)
             
@@ -180,30 +182,29 @@ class FinlightDataFetcher:
         page_size: int = 50,
     ) -> str:
         """根据查询参数生成缓存文件名
-        
+
         缓存 key 格式: news_{date}.json
+        对于跨天时间范围，使用结束日期（当天）作为文件名。
         """
-        # 优先使用 from/to 时间范围作为日期标识
+        # 优先使用 to/end_date 作为日期标识（当天）
         date_info = ""
-        if from_ and to:
-            # 从 from_ 提取日期部分
-            from_date = from_.split("T")[0].replace("-", "")
-            to_date = to.split("T")[0].replace("-", "")
-            if from_date == to_date:
-                date_info = from_date
-            else:
-                date_info = f"{from_date}_{to_date}"
-        elif start_date and end_date and start_date == end_date:
-            # 单日查询
-            date_info = start_date.replace("-", "")
-        elif start_date or end_date:
-            date_info = f"{start_date or 'na'}_{end_date or 'na'}"
+        if to:
+            # 使用结束时间的日期部分（当天）
+            date_info = to.split("T")[0].replace("-", "")
         elif from_:
+            # 只有 from_ 时，使用 from_ 的日期
             date_info = from_.split("T")[0].replace("-", "")
+        elif start_date and end_date:
+            # 使用 end_date 作为日期标识
+            date_info = end_date.replace("-", "")
+        elif end_date:
+            date_info = end_date.replace("-", "")
+        elif start_date:
+            date_info = start_date.replace("-", "")
         else:
             # 无日期信息，使用今日日期
             date_info = datetime.now().strftime("%Y%m%d")
-        
+
         return f"news_{date_info}"
     
     def _load_from_cache(self, cache_key: str, cache_dir: str) -> Optional[Dict[str, Any]]:
@@ -396,9 +397,9 @@ class FinlightDataFetcher:
         """
         if countries is None:
             countries = ["CN"]
-        
+
         return self.fetch_articles(
-            query=f"country:{','.join(countries)}" if countries else None,
+            query=f"country:{','.join(countries)}",
             countries=countries,
             categories=categories,
             from_=from_,

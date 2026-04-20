@@ -441,18 +441,18 @@ class NewsSentimentFetcher:
         use_finlight_cache: bool = True,
     ) -> List[Dict[str, str]]:
         """获取组合新闻 sections（东方财富 + Finlight，优先使用本地缓存）
-        
+
         Args:
             date_str: 日期字符串，格式 YYYYMMDD
             use_finlight: 是否同时获取 Finlight 新闻
             finlight_categories: Finlight 新闻分类筛选
             use_finlight_cache: 是否优先使用 Finlight 本地缓存，默认 True
-            
+
         Returns:
             List[Dict]: 合并后的 sections 列表
         """
         sections = []
-        
+
         # 1. 获取东方财富新闻（原有逻辑）
         try:
             eastmoney_data = self.get_news_by_date(date_str)
@@ -461,7 +461,7 @@ class NewsSentimentFetcher:
                 logger.info(f"东方财富新闻: {len(eastmoney_data.get('sections', []))} 条")
         except Exception as e:
             logger.warning(f"获取东方财富新闻失败: {e}")
-        
+
         # 2. 获取 Finlight 新闻（新增，优先使用缓存）
         if use_finlight:
             try:
@@ -476,7 +476,7 @@ class NewsSentimentFetcher:
                     logger.info(f"Finlight 新闻: {len(finlight_sections)} 条")
             except Exception as e:
                 logger.warning(f"获取 Finlight 新闻失败: {e}")
-        
+
         logger.info(f"组合新闻总计: {len(sections)} 条")
         return sections
 

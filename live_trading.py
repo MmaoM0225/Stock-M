@@ -78,7 +78,7 @@ SECTOR_MANAGER_ROOT = Path("data/artifacts/manager/sector_manager")
 STOCK_POOL_MANAGER_ROOT = Path("data/artifacts/manager/stock_pool_manager")
 MACRO_MANAGER_ROOT = Path("data/artifacts/manager/macro_manager")
 STOCK_SCREENER_ROOT = Path("data/artifacts/analyst/stock_analyst/stock_screener")
-PORTFOLIO_DECISION_ROOT = Path("data/artifacts/decision/2025_7d_for_once_ver1.3/portfolio")
+PORTFOLIO_DECISION_ROOT = Path("data/artifacts/decision/202401-202604_7d_for_once_ver1.3/portfolio")
 
 DEFAULT_INITIAL_CAPITAL = 500000.0
 
@@ -241,37 +241,44 @@ def run_portfolio_decision(
     return result
 
 
-def get_trading_days_2025(interval: int = 7, exchange: str = "SSE") -> List[str]:
+def get_trading_days(
+    start_date: str,
+    end_date: str,
+    interval: int = 7,
+    exchange: str = "SSE"
+) -> List[str]:
     """
-    获取2025年的交易日列表，按指定间隔筛选
+    获取指定日期范围的交易日列表，按指定间隔筛选
     
     Args:
+        start_date: 开始日期 (YYYYMMDD)
+        end_date: 结束日期 (YYYYMMDD)
         interval: 运行间隔（交易日数），默认7天
         exchange: 交易所代码，默认SSE（上交所）
     
     Returns:
         筛选后的交易日列表（YYYYMMDD格式）
     """
-    logger.info(f"获取2025年交易日历 (exchange={exchange})...")
+    logger.info(f"获取交易日历 {start_date}-{end_date} (exchange={exchange})...")
     
     fetcher = MarketDataFetcher()
     
-    # 获取2025年全部交易日（is_open=1表示交易日）
+    # 获取指定日期范围的全部交易日（is_open=1表示交易日）
     df = fetcher.fetch_trade_cal(
         exchange=exchange,
-        start_date="20250101",
-        end_date="20251231",
+        start_date=start_date,
+        end_date=end_date,
         is_open="1",
     )
     
     if df.empty:
-        raise RuntimeError("无法获取2025年交易日历")
+        raise RuntimeError(f"无法获取交易日历 {start_date}-{end_date}")
     
     # 提取交易日列表
     all_trading_days = df["cal_date"].tolist()
     all_trading_days.sort()
     
-    logger.info(f"2025年共 {len(all_trading_days)} 个交易日")
+    logger.info(f"共 {len(all_trading_days)} 个交易日")
     
     # 按间隔筛选
     selected_days = all_trading_days[::interval]
@@ -418,17 +425,18 @@ def main():
     
     # 获取交易日列表
     try:
-        all_trading_days = get_trading_days_2025(args.interval, args.exchange)
+        all_trading_days = get_trading_days(
+            start_date=str(args.start_date),
+            end_date=str(args.end_date),
+            interval=args.interval,
+            exchange=args.exchange,
+        )
     except Exception as e:
         logger.error(f"获取交易日历失败: {e}")
         sys.exit(1)
     
-    # 根据起止日期筛选（确保都是字符串类型）
-    start_date = str(args.start_date)
-    end_date = str(args.end_date)
-    # 将交易日列表中的元素都转为字符串
-    all_trading_days = [str(d) for d in all_trading_days]
-    trading_days = [d for d in all_trading_days if start_date <= d <= end_date]
+    # 交易日列表已经是筛选后的结果
+    trading_days = [str(d) for d in all_trading_days]
     
     if not trading_days:
         logger.error(f"指定日期范围内无交易日: {start_date} - {end_date}")
