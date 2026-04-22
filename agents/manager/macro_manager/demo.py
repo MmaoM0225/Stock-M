@@ -1,7 +1,7 @@
 """
 Macro Manager（宏观管理器）Demo。
 
-编排 5 个微观分析师子图（新闻、市场情绪、流动性、大宗商品、宏观经济），
+编排 4 个宏观分析师子图（新闻、市场情绪、大宗商品、宏观经济），
 控制并发并汇总结果。
 
     python -m agents.manager.macro_manager.demo
@@ -48,7 +48,7 @@ def main():
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    parser = argparse.ArgumentParser(description="Macro Manager Demo：编排 5 个分析师子图")
+    parser = argparse.ArgumentParser(description="Macro Manager Demo：编排 4 个分析师子图")
     parser.add_argument("date", nargs="?", help="交易日期 YYYYMMDD")
     args = parser.parse_args()
 
@@ -79,7 +79,7 @@ def main():
     trade_date = _resolve_trade_date(target_date)
     invoke_input: Dict[str, Any] = {"trade_date": trade_date}
 
-    print(f"交易日 {trade_date}，运行 Macro Manager（5 个分析师子图）...")
+    print(f"交易日 {trade_date}，运行 Macro Manager（4 个分析师子图）...")
     start = time.perf_counter()
     result = graph.invoke(invoke_input)
     elapsed = time.perf_counter() - start
@@ -88,7 +88,6 @@ def main():
     keys = [
         "news_analysis",
         "market_sentiment_analyst_summary",
-        "liquidity_analyst_summary",
         "commodity_analyst_summary",
         "macro_economist_analysis",
     ]

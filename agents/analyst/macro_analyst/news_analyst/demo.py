@@ -1,5 +1,5 @@
 """
-新闻分析子图 Demo（全面使用 Finlight API）。
+新闻分析子图 Demo（融合东方财富 + Finlight）。
 
 可以直接运行本文件，查看 map-reduce 子图是否能够正确运行：
 
@@ -87,7 +87,7 @@ def main():
         callbacks=get_llm_callbacks(),
     )
 
-    # 2. 构建 Finlight fetcher，fetch 节点负责获取新闻和完整行业列表
+    # 2. 构建 Finlight fetcher，fetch 节点会融合东方财富本地新闻 + Finlight 新闻
     print("初始化 Finlight API...")
     finlight_fetcher = FinlightDataFetcher()
     graph = create_news_graph(llm, finlight_fetcher)
@@ -104,8 +104,7 @@ def main():
 
     elapsed = time.perf_counter() - start_time
     news_source = result.get("news_source", "")
-    source_desc = "本地缓存" if news_source == "local" else "API 请求" if news_source == "api" else "未知"
-    print(f"新闻分析子图运行完成，耗时 {elapsed:.2f} 秒。（新闻来源: {source_desc}）")
+    print(f"新闻分析子图运行完成，耗时 {elapsed:.2f} 秒。（新闻来源: {news_source or 'unknown'}）")
 
     from pprint import pprint
 

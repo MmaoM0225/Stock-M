@@ -60,11 +60,7 @@ API 前缀：`/api/v1/data`
 
 - `GET /api/v1/data/analyst/macro/market-sentiment/{trade_date}`
 
-### 2.14 获取流动性 Analyst 结果
-
-- `GET /api/v1/data/analyst/macro/liquidity/{trade_date}`
-
-### 2.15 获取大宗商品 Analyst 结果
+### 2.14 获取大宗商品 Analyst 结果
 
 - `GET /api/v1/data/analyst/macro/commodity/{trade_date}`
 
@@ -116,7 +112,6 @@ API 前缀：`/api/v1/data`
 - 宏观经济 analyst：`data/artifacts/analyst/macro_analyst/macro_economist/{trade_date}/result.json`
 - 新闻 analyst：`data/artifacts/analyst/macro_analyst/news_analyst/{trade_date}/result.json`
 - 市场情绪 analyst：`data/artifacts/analyst/macro_analyst/market_sentiment_analyst/{trade_date}/result.json`
-- 流动性 analyst：`data/artifacts/analyst/macro_analyst/liquidity_analyst/{trade_date}/result.json`
 - 大宗商品 analyst：`data/artifacts/analyst/macro_analyst/commodity_analyst/{trade_date}/result.json`
 
 ## 6. Analyst 数据接口汇总
@@ -125,7 +120,7 @@ API 前缀：`/api/v1/data`
 
 - Stock Analyst：`screener`、`fundamental`、`technical`
 - Sector Analyst：`trend`、`capital-flow`
-- Macro Analyst：`economist`、`news`、`market-sentiment`、`liquidity`、`commodity`
+- Macro Analyst：`economist`、`news`、`market-sentiment`、`commodity`
 
 ## 7. 建议
 

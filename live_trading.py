@@ -78,7 +78,7 @@ SECTOR_MANAGER_ROOT = Path("data/artifacts/manager/sector_manager")
 STOCK_POOL_MANAGER_ROOT = Path("data/artifacts/manager/stock_pool_manager")
 MACRO_MANAGER_ROOT = Path("data/artifacts/manager/macro_manager")
 STOCK_SCREENER_ROOT = Path("data/artifacts/analyst/stock_analyst/stock_screener")
-PORTFOLIO_DECISION_ROOT = Path("data/artifacts/decision/202401-202604_7d_for_once_ver1.3/portfolio")
+PORTFOLIO_DECISION_ROOT = Path("data/artifacts/decision/overall_ver1.4/portfolio")
 
 DEFAULT_INITIAL_CAPITAL = 500000.0
 

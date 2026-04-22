@@ -44,7 +44,7 @@ class ScreenerCriteria:
     max_pb: Optional[float] = None  # 市净率上限
 
     # 股价限制
-    max_price: Optional[float] = None  # 股价上限（避免高价股如茅台）
+    max_price: Optional[float] = None  # 股价上限（按需启用）
 
     # 数量与排序
     max_stocks: int = 100

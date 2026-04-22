@@ -22,7 +22,7 @@ def create_macro_manager_graph(
     max_concurrent_subgraphs: Optional[int] = None,
 ) -> Any:
     """
-    构建 Macro Manager 图：编排 5 个微观分析师子图，控制并发并汇总结果。
+    构建 Macro Manager 图：编排 4 个宏观分析师子图，控制并发并汇总结果。
 
     流程：先检测本地已存在的 analyst 结果，仅补跑缺失子图，再统一执行 macro_summary → END。
 
@@ -40,12 +40,11 @@ def create_macro_manager_graph(
         else MACRO_MANAGER_MAX_CONCURRENT_SUBGRAPHS
     )
 
-    # 构建 5 个分析师子图
+    # 构建 4 个分析师子图（去除与 macro_economist 职责重叠的独立 liquidity_analyst）
     from agents.analyst.macro_analyst.news_analyst.graph import create_news_graph
     from agents.analyst.macro_analyst.market_sentiment_analyst.graph import (
         create_market_sentiment_analyst_graph,
     )
-    from agents.analyst.macro_analyst.liquidity_analyst.graph import create_liquidity_analyst_graph
     from agents.analyst.macro_analyst.commodity_analyst.graph import create_commodity_analyst_graph
     from agents.analyst.macro_analyst.macro_economist.graph import create_macro_economist_graph
 
@@ -63,14 +62,12 @@ def create_macro_manager_graph(
 
     news_graph = create_news_graph(llm, finlight_fetcher)
     market_sentiment_graph = create_market_sentiment_analyst_graph(llm=llm)
-    liquidity_graph = create_liquidity_analyst_graph(llm=llm)
     commodity_graph = create_commodity_analyst_graph(llm=llm)
     macro_economist_graph = create_macro_economist_graph(llm=llm)
 
     analyst_tasks: List[Tuple[str, Any, str]] = [
         ("news", news_graph, "news_analysis"),
         ("market_sentiment", market_sentiment_graph, "market_sentiment_analyst_summary"),
-        ("liquidity", liquidity_graph, "liquidity_analyst_summary"),
         ("commodity", commodity_graph, "commodity_analyst_summary"),
         ("macro_economist", macro_economist_graph, "macro_economist_analysis"),
     ]
