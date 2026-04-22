@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -80,6 +81,31 @@ def _pct_to_float(value: Any) -> float:
         return 0.0
     text = str(value).strip().replace("%", "").replace("+", "")
     return _to_float(text, default=0.0) / 100.0
+
+
+def _parse_target_position_range(target_position: Any) -> Tuple[Optional[float], Optional[float]]:
+    """
+    解析 macro_hint.target_position（如 "50%-70%"）为小数区间 (0.5, 0.7)。
+    """
+    if target_position is None:
+        return None, None
+    text = str(target_position).strip()
+    if not text:
+        return None, None
+
+    match = re.search(r"(\d+(?:\.\d+)?)\s*%\s*-\s*(\d+(?:\.\d+)?)\s*%", text)
+    if match:
+        low = max(0.0, min(1.0, _to_float(match.group(1), 0.0) / 100.0))
+        high = max(0.0, min(1.0, _to_float(match.group(2), 0.0) / 100.0))
+        if low > high:
+            low, high = high, low
+        return low, high
+
+    single = re.search(r"(\d+(?:\.\d+)?)\s*%", text)
+    if single:
+        value = max(0.0, min(1.0, _to_float(single.group(1), 0.0) / 100.0))
+        return value, value
+    return None, None
 
 
 def _fmt_pct(value: float) -> str:
@@ -417,11 +443,101 @@ def _normalize_operations(data: Dict[str, Any], fallback_ops: List[Dict[str, Any
     return out or fallback_ops
 
 
+def _append_implicit_hold_operations(
+    old_table: List[Dict[str, Any]],
+    operations: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    对旧持仓做兜底：若某资产未出现在本期操作中，自动补一条“持有”。
+
+    这样可以避免“未给操作=凭空消失”的问题，保证组合账本可追溯。
+    """
+    existing_keys = set()
+    max_priority = 0
+    for op in operations:
+        key = str(op.get("ts_code") or op.get("asset_name") or "").strip()
+        if key:
+            existing_keys.add(key)
+        max_priority = max(max_priority, int(_to_float(op.get("priority"), 0)))
+
+    appended: List[Dict[str, Any]] = []
+    next_priority = max_priority + 1
+    for row in old_table:
+        if str(row.get("资产名称")) == "待投资现金":
+            continue
+        ts_code = str(row.get("ts_code") or "").strip()
+        asset_name = str(row.get("资产名称") or "").strip()
+        key = ts_code or asset_name
+        if not key or key in existing_keys:
+            continue
+        appended.append(
+            {
+                "ts_code": ts_code or None,
+                "asset_name": asset_name,
+                "operation": "持有",
+                "target_weight_pct": _pct_to_float(row.get("仓位")),
+                "reason": "本期未给出该持仓操作，系统自动按持有处理",
+                "priority": next_priority,
+            }
+        )
+        existing_keys.add(key)
+        next_priority += 1
+
+    return operations + appended
+
+
+def _build_programmatic_decision_summary(
+    old_table: List[Dict[str, Any]],
+    new_table: List[Dict[str, Any]],
+    reason_table: List[Dict[str, Any]],
+    llm_reasoning: str,
+) -> str:
+    """
+    用程序生成带数字的决策摘要，避免 LLM 文案中的数字偏差。
+    LLM 仅作为“原因描述补充”，不参与关键数字计算。
+    """
+
+    def _position_pct(table: List[Dict[str, Any]]) -> float:
+        cash_weight = 0.0
+        for row in table:
+            if str(row.get("资产名称")) == "待投资现金":
+                cash_weight = _pct_to_float(row.get("仓位"))
+                break
+        return max(0.0, (1.0 - cash_weight) * 100.0)
+
+    old_pos = _position_pct(old_table)
+    new_pos = _position_pct(new_table)
+
+    old_stock_cnt = sum(1 for r in old_table if str(r.get("资产名称")) != "待投资现金" and _to_float(r.get("市值 (元)"), 0.0) > 0)
+    new_stock_cnt = sum(1 for r in new_table if str(r.get("资产名称")) != "待投资现金" and _to_float(r.get("市值 (元)"), 0.0) > 0)
+
+    op_counter: Dict[str, int] = {"建仓": 0, "加仓": 0, "减仓": 0, "清仓": 0, "持有": 0}
+    for row in reason_table:
+        op = str(row.get("操作") or "")
+        if op in op_counter:
+            op_counter[op] += 1
+
+    op_parts = [f"{k}{v}只" for k, v in op_counter.items() if v > 0]
+    op_text = "，".join(op_parts) if op_parts else "无有效调仓动作"
+
+    summary = (
+        f"本次调仓后总仓位由 {old_pos:.2f}% 变为 {new_pos:.2f}%，"
+        f"持仓股票数量由 {old_stock_cnt} 只变为 {new_stock_cnt} 只。"
+        f"操作统计：{op_text}。"
+    )
+
+    llm_reasoning = (llm_reasoning or "").strip()
+    if llm_reasoning:
+        summary += f" 策略原因：{llm_reasoning}"
+    return summary
+
+
 def _apply_operations_to_table(
     trade_date: str,
     initial_capital: float,
     old_table: List[Dict[str, Any]],
     operations: List[Dict[str, Any]],
+    target_position_range: Optional[Tuple[Optional[float], Optional[float]]] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], float]:
     old_map: Dict[str, Dict[str, Any]] = {}
     previous_cash = 0.0
@@ -459,10 +575,11 @@ def _apply_operations_to_table(
     invested = 0.0
     rank = 1
 
-    # 先计算目标仓位并做归一化，保证“仓位=资产占总资产比例”，总和不超过 100%。
+    # 先计算目标仓位并做归一化，保证“仓位=资产占总资产比例”。
     normalized_weights: Dict[int, float] = {}
     active_idx: List[int] = []
     raw_weight_sum = 0.0
+    per_stock_max_weight = 0.20
     for idx, op in enumerate(operations):
         operation = str(op.get("operation") or "持有")
         row_weight = _to_float(op.get("target_weight_pct"), 0.0)
@@ -472,15 +589,49 @@ def _apply_operations_to_table(
         row_weight = max(0.0, row_weight)
         if operation == "清仓":
             row_weight = 0.0
+        # 程序级硬约束：单只股票仓位不超过 20%
+        row_weight = min(row_weight, per_stock_max_weight)
         normalized_weights[idx] = row_weight
         if row_weight > 0:
             active_idx.append(idx)
             raw_weight_sum += row_weight
 
-    if raw_weight_sum > 1.0 and active_idx:
-        scale = 1.0 / raw_weight_sum
+    # 程序级硬约束：组合总仓位限制在 target_position 区间（若提供）
+    # 规则：先按 LLM 给出的总权重计算，再钳制到 [min_target, max_target]。
+    # 不会默认拉满到上限，避免“总是冲到目标区间上沿”。
+    min_target = None
+    max_target = 1.0
+    if target_position_range is not None:
+        min_target, max_target = target_position_range
+        if max_target is None:
+            max_target = 1.0
+    target_total = raw_weight_sum
+    if max_target is not None and target_total > max_target:
+        target_total = max_target
+    if min_target is not None and target_total < min_target:
+        # 组合仓位低于下限时尝试提升到下限（若后续受单票上限约束达不到，则会停留在可达值）
+        target_total = min_target
+    if raw_weight_sum > 0 and active_idx:
+        target_total = max(0.0, min(1.0, target_total))
+        scale = target_total / raw_weight_sum
         for idx in active_idx:
-            normalized_weights[idx] = normalized_weights[idx] * scale
+            normalized_weights[idx] = min(normalized_weights[idx] * scale, per_stock_max_weight)
+
+        # 二次分配：若因单票20%上限导致总仓位不足目标，按剩余容量继续补齐
+        deficit = target_total - sum(normalized_weights[i] for i in active_idx)
+        if deficit > 1e-6:
+            expandable = [i for i in active_idx if normalized_weights[i] < per_stock_max_weight - 1e-9]
+            while deficit > 1e-6 and expandable:
+                per_add = deficit / len(expandable)
+                new_expandable: List[int] = []
+                for i in expandable:
+                    room = per_stock_max_weight - normalized_weights[i]
+                    add = min(room, per_add)
+                    normalized_weights[i] += add
+                    deficit -= add
+                    if normalized_weights[i] < per_stock_max_weight - 1e-9:
+                        new_expandable.append(i)
+                expandable = new_expandable
 
     for op_idx, op in sorted(enumerate(operations), key=lambda x: int(x[1].get("priority") or 9999)):
         ts_code = str(op.get("ts_code") or "").strip()
@@ -498,6 +649,7 @@ def _apply_operations_to_table(
             old_cost = _to_float(old.get("开盘价"), 0.0)
         new_w = normalized_weights.get(op_idx, _to_float(op.get("target_weight_pct"), old_w))
         operation = str(op.get("operation") or "持有")
+        auto_rebalance_reason: Optional[str] = None
         if operation == "清仓":
             new_w = 0.0
         open_price = _fetch_open_price(ts_code, trade_date) if ts_code else None
@@ -506,6 +658,17 @@ def _apply_operations_to_table(
         shares: Any = 0
         actual_w = 0.0
         cost_price: Optional[float] = None
+
+        # 若仓位约束要求调仓，则把“持有”自动转成“加仓/减仓”执行。
+        # 这样可以真正落实总仓位区间，而不是文案层面约束。
+        if operation == "持有" and ts_code:
+            eps = 1e-4
+            if new_w > old_w + eps:
+                operation = "加仓"
+                auto_rebalance_reason = "为满足目标仓位区间，系统将持有自动调整为加仓"
+            elif new_w < old_w - eps:
+                operation = "减仓"
+                auto_rebalance_reason = "为满足目标仓位区间，系统将持有自动调整为减仓"
 
         # A股按整手（100股）计算可买股数；再用可成交总价回算真实仓位。
         # 逻辑：四舍五入到最接近目标金额的整手数，让实际成交金额更接近目标金额
@@ -631,7 +794,7 @@ def _apply_operations_to_table(
                 "实际成交金额(元)": amount,
                 "成交股数": shares,
                 "成本价": round(cost_price, 4) if isinstance(cost_price, (int, float)) and cost_price > 0 else None,
-                "操作原因": op.get("reason"),
+                "操作原因": (op.get("reason") or "") + (f"；{auto_rebalance_reason}" if auto_rebalance_reason else ""),
             }
         )
 
@@ -739,7 +902,7 @@ def create_llm_make_decision_node(llm: Any, stock_manager_graph: Any = None):
             last_exception: Optional[Exception] = None
             data: Dict[str, Any] = {}
             operations: List[Dict[str, Any]] = []
-            summary = ""
+            llm_reasoning = ""
 
             for attempt in range(max_retries):
                 try:
@@ -751,7 +914,7 @@ def create_llm_make_decision_node(llm: Any, stock_manager_graph: Any = None):
                     operations = _normalize_operations(data, [])
                     if not operations:
                         raise ValueError("LLM返回为空或格式不符合要求（operations为空）")
-                    summary = str(data.get("decision_summary") or "").strip() or "已基于资产组合与候选池生成操作。"
+                    llm_reasoning = str(data.get("decision_summary") or "").strip() or "已基于资产组合与候选池生成操作。"
                     logger.info(f"组合决策 LLM 调用成功（尝试 {attempt + 1}/{max_retries}）")
                     break  # 成功则退出重试循环
                 except Exception as e:
@@ -783,12 +946,24 @@ def create_llm_make_decision_node(llm: Any, stock_manager_graph: Any = None):
                 }
                 return {**state, "decision_result": decision_result}
 
+        operations = _append_implicit_hold_operations(context.get("portfolio_table") or [], operations)
+
+        target_position_range = _parse_target_position_range((context.get("macro_hint") or {}).get("target_position"))
+
         new_table, reason_table, total_capital = _apply_operations_to_table(
             trade_date=trade_date,
             initial_capital=initial_capital,
             old_table=context.get("portfolio_table") or [],
             operations=operations,
+            target_position_range=target_position_range,
         )
+        summary = _build_programmatic_decision_summary(
+            old_table=context.get("portfolio_table") or [],
+            new_table=new_table,
+            reason_table=reason_table,
+            llm_reasoning=llm_reasoning,
+        )
+
         decision_result = {
             "trade_date": trade_date,
             "portfolio_table": new_table,
@@ -797,6 +972,7 @@ def create_llm_make_decision_node(llm: Any, stock_manager_graph: Any = None):
             "meta": {
                 "initial_capital": initial_capital,
                 "total_capital": total_capital,
+                "llm_reasoning": llm_reasoning,
                 "source_portfolio_path": state.get("prev_decision_path"),
                 "warnings": state.get("decision_warnings") or [],
                 "generated_at": datetime.now().astimezone().isoformat(),

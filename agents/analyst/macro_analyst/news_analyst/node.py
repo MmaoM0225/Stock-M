@@ -19,6 +19,119 @@ logger = logging.getLogger(__name__)
 NEWS_ARTIFACT_ROOT = Path("data") / "artifacts" / "analyst" / "macro_analyst" / "news_analyst"
 
 
+def _normalize_text(value: str) -> str:
+    """统一文本用于去重比较。"""
+    return "".join(str(value or "").strip().lower().split())
+
+
+def _deduplicate_sections(sections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """按 link 优先、title+content 兜底去重。"""
+    unique_sections: List[Dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    duplicate_count = 0
+
+    for section in sections:
+        link = _normalize_text(section.get("link", ""))
+        title = _normalize_text(section.get("title", ""))
+        content = _normalize_text(section.get("content", ""))
+
+        key = f"link:{link}" if link else f"text:{title}|{content}"
+        if key in seen_keys:
+            duplicate_count += 1
+            continue
+
+        seen_keys.add(key)
+        unique_sections.append(section)
+
+    if duplicate_count:
+        logger.info("新闻去重完成：移除重复 %d 条，保留 %d 条", duplicate_count, len(unique_sections))
+    return unique_sections
+
+
+def _filter_sections_by_publish_range(
+    sections: List[Dict[str, Any]],
+    from_time: datetime,
+    to_time: datetime,
+) -> List[Dict[str, Any]]:
+    """
+    按 publish_date 过滤新闻，无法解析时间的条目保留（避免过度丢弃）。
+    """
+    filtered: List[Dict[str, Any]] = []
+    dropped = 0
+
+    for section in sections:
+        publish_date = str(section.get("publish_date", "") or "").strip()
+        if not publish_date:
+            filtered.append(section)
+            continue
+
+        parsed_dt: Optional[datetime] = None
+        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+            try:
+                parsed_dt = datetime.strptime(publish_date, fmt)
+                break
+            except ValueError:
+                continue
+
+        if parsed_dt is None:
+            try:
+                parsed_dt = datetime.fromisoformat(publish_date.replace("Z", "+00:00")).replace(tzinfo=None)
+            except Exception:
+                filtered.append(section)
+                continue
+
+        if from_time <= parsed_dt <= to_time:
+            filtered.append(section)
+        else:
+            dropped += 1
+
+    if dropped:
+        logger.info("时间窗过滤完成：移除越界新闻 %d 条，保留 %d 条", dropped, len(filtered))
+    return filtered
+
+
+def _filter_sections_by_publish_before(
+    sections: List[Dict[str, Any]],
+    to_time: datetime,
+) -> List[Dict[str, Any]]:
+    """
+    仅保留发布时间 <= to_time 的新闻（用于历史日期向前回退）。
+    无法解析时间的条目保留，避免误伤。
+    """
+    filtered: List[Dict[str, Any]] = []
+    dropped = 0
+
+    for section in sections:
+        publish_date = str(section.get("publish_date", "") or "").strip()
+        if not publish_date:
+            filtered.append(section)
+            continue
+
+        parsed_dt: Optional[datetime] = None
+        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+            try:
+                parsed_dt = datetime.strptime(publish_date, fmt)
+                break
+            except ValueError:
+                continue
+
+        if parsed_dt is None:
+            try:
+                parsed_dt = datetime.fromisoformat(publish_date.replace("Z", "+00:00")).replace(tzinfo=None)
+            except Exception:
+                filtered.append(section)
+                continue
+
+        if parsed_dt <= to_time:
+            filtered.append(section)
+        else:
+            dropped += 1
+
+    if dropped:
+        logger.info("历史回退时间过滤：移除未来新闻 %d 条，保留 %d 条", dropped, len(filtered))
+    return filtered
+
+
 class EventType(str, Enum):
     policy = "policy"
     geopolitics = "geopolitics"
@@ -101,7 +214,7 @@ def _get_news_sections_by_date(
     按日期获取新闻 sections，全面使用 Finlight API。
 
     获取指定日期的前一天00:00到当天12:00的新闻数据（跨天时间范围）。
-    如果历史日期没有新闻，则回退到获取最新新闻。
+    如果历史日期没有新闻，则回退到“该日期之前最近新闻”（不会使用全局最新新闻）。
 
     Args:
         date_str: 日期字符串，格式 YYYYMMDD（指定日期）
@@ -133,6 +246,8 @@ def _get_news_sections_by_date(
 
         # 转换为 sections 格式
         sections = finlight_fetcher.convert_to_sections_format(result)
+        sections = _filter_sections_by_publish_range(sections, previous_date, current_date.replace(hour=12, minute=0, second=0))
+        sections = _deduplicate_sections(sections)
 
         if sections:
             # 判断数据来源：检查是否有缓存文件
@@ -147,16 +262,35 @@ def _get_news_sections_by_date(
             logger.info(f"获取 {date_str} 新闻成功（{prev_date_str}00:00到{date_str}12:00），共 {len(sections)} 条 section（来源: {source}）")
             return (sections, source)
         else:
-            # 历史日期没有新闻，回退到获取最新新闻
-            logger.warning(f"历史日期 {date_str} 无新闻，回退到获取最新新闻")
-            return _get_news_sections_latest(finlight_fetcher, use_cache=use_cache)
+            # 历史日期没有新闻时，向前回退到“该日期之前最近新闻”
+            fallback_to = current_date.replace(hour=12, minute=0, second=0)
+            fallback_to_str = fallback_to.strftime("%Y-%m-%dT%H:%M")
+            logger.warning("历史日期 %s 无新闻，回退获取截止 %s 的最近新闻", date_str, fallback_to_str)
+
+            fallback_result = finlight_fetcher.fetch_articles(
+                query="country:CN",
+                countries=["CN"],
+                to=fallback_to_str,
+                page_size=50,
+                use_cache=use_cache,
+            )
+            fallback_sections = finlight_fetcher.convert_to_sections_format(fallback_result)
+            fallback_sections = _filter_sections_by_publish_before(fallback_sections, fallback_to)
+            fallback_sections = _deduplicate_sections(fallback_sections)
+
+            if fallback_sections:
+                logger.info("历史日期 %s 回退成功，获取到 %d 条截止当日的最近新闻", date_str, len(fallback_sections))
+                return (fallback_sections, "api")
+
+            logger.warning("历史日期 %s 回退后仍无可用新闻，返回空结果", date_str)
+            return ([], "api")
 
     except Exception as e:
-        logger.warning(f"获取新闻失败: {e}，回退到获取最新新闻")
+        logger.warning(f"获取历史日期新闻失败: {e}，返回空结果")
         import traceback
         logger.debug(traceback.format_exc())
-        # 出错时回退到获取最新新闻
-        return _get_news_sections_latest(finlight_fetcher, use_cache=use_cache)
+        # 出错时不回退最新新闻，避免历史日期污染
+        return ([], "api")
 
 
 def _get_news_sections_latest(
@@ -185,6 +319,7 @@ def _get_news_sections_latest(
         
         # 转换为 sections 格式
         sections = finlight_fetcher.convert_to_sections_format(result)
+        sections = _deduplicate_sections(sections)
         
         if sections:
             logger.info(f"获取最新新闻成功，共 {len(sections)} 条 section")
