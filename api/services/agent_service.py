@@ -4,7 +4,6 @@ from typing import Any, Dict, Optional
 from dataflow.news_sentiment import NewsSentimentFetcher
 
 from agents.analyst.macro_analyst.commodity_analyst.graph import create_commodity_analyst_graph
-from agents.analyst.macro_analyst.liquidity_analyst.graph import create_liquidity_analyst_graph
 from agents.analyst.macro_analyst.macro_economist.graph import create_macro_economist_graph
 from agents.analyst.macro_analyst.market_sentiment_analyst.graph import create_market_sentiment_analyst_graph
 from agents.analyst.macro_analyst.news_analyst.graph import create_news_graph
@@ -145,11 +144,6 @@ class AgentService:
         artifact = (
             self.artifacts_root / "analyst" / "macro_analyst" / "market_sentiment_analyst" / trade_date / "result.json"
         )
-        return self._run_with_cache(graph, {"trade_date": trade_date}, artifact, force)
-
-    def run_liquidity(self, trade_date: str, force: bool = False) -> Dict[str, Any]:
-        graph = create_liquidity_analyst_graph(self.llm)
-        artifact = self.artifacts_root / "analyst" / "macro_analyst" / "liquidity_analyst" / trade_date / "result.json"
         return self._run_with_cache(graph, {"trade_date": trade_date}, artifact, force)
 
     def run_commodity(self, trade_date: str, force: bool = False) -> Dict[str, Any]:

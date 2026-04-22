@@ -459,7 +459,12 @@ def _apply_filters_without_sector(df: pd.DataFrame, criteria: ScreenerCriteria) 
     if criteria.max_pb is not None and "pb" in out.columns:
         out = out[out["pb"] <= criteria.max_pb]
 
-    # 注：股价上限筛选暂时未启用，预留字段 max_price 供后续使用
+    if criteria.max_price is not None:
+        if "close" not in out.columns:
+            logger.warning("缺少 close 列，跳过股价上限过滤")
+        else:
+            close_price = pd.to_numeric(out["close"], errors="coerce")
+            out = out[close_price <= float(criteria.max_price)]
 
     if criteria.min_listing_days and "list_date" in out.columns:
         from datetime import datetime, timedelta
@@ -701,6 +706,7 @@ def create_parse_criteria_node():
             "max_pe": state.get("max_pe"),
             "min_pb": state.get("min_pb"),
             "max_pb": state.get("max_pb"),
+            "max_price": state.get("max_price"),
             "max_stocks": state.get("max_stocks", 100),
             "sort_by": state.get("sort_by", "total_mv"),
             "sort_order": state.get("sort_order", "desc"),

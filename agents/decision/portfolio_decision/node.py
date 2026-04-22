@@ -4,7 +4,7 @@ Portfolio Decision（组合决策）- 节点
 核心流程：
 1) 读取最近一期资产组合表（无则视为首次建仓）
 2) 复用 stock_pool_manager 的 stock_manager 结果，缺失项再补跑 stock_manager
-3) 给出操作（建仓/加仓/减仓/清仓），并按当日开盘价计算目标市值与仓位变化
+3) 给出操作（建仓/加仓/减仓/清仓），并按当日收盘价计算目标市值与仓位变化
 4) 输出分离的两张表：资产组合表 + 操作原因表
 """
 from __future__ import annotations
@@ -148,7 +148,8 @@ def _canonical_holding_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "持仓股数": row.get("持仓股数", row.get("shares")),
         "成本价": round(raw_cost, 4) if raw_cost > 0 else None,
         "操作": row.get("操作", "-"),
-        "开盘价": row.get("开盘价"),
+        # 向后兼容：优先读取新字段“收盘价”，旧数据中可能仍是“开盘价”
+        "收盘价": row.get("收盘价", row.get("开盘价")),
     }
 
 
@@ -320,15 +321,15 @@ def _collect_cached_manager_map(stock_pool_result: Dict[str, Any]) -> Dict[str, 
     return out
 
 
-def _fetch_open_price(ts_code: str, trade_date: str) -> Optional[float]:
+def _fetch_close_price(ts_code: str, trade_date: str) -> Optional[float]:
     if not ts_code:
         return None
     try:
         fetcher = KLineDataFetcher()
         df = fetcher.fetch_daily_data(ts_code=ts_code, start_date=trade_date, end_date=trade_date, adj=None)
-        if df is None or df.empty or "open" not in df.columns:
+        if df is None or df.empty or "close" not in df.columns:
             return None
-        return _to_float(df.iloc[-1]["open"], 0.0)
+        return _to_float(df.iloc[-1]["close"], 0.0)
     except Exception:
         return None
 
@@ -446,12 +447,15 @@ def _normalize_operations(data: Dict[str, Any], fallback_ops: List[Dict[str, Any
 def _append_implicit_hold_operations(
     old_table: List[Dict[str, Any]],
     operations: List[Dict[str, Any]],
+    manager_map: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """
     对旧持仓做兜底：若某资产未出现在本期操作中，自动补一条“持有”。
 
     这样可以避免“未给操作=凭空消失”的问题，保证组合账本可追溯。
+    若存在 stock_manager 结论，优先使用其信号原因作为“持有”原因。
     """
+    manager_map = manager_map or {}
     existing_keys = set()
     max_priority = 0
     for op in operations:
@@ -470,13 +474,21 @@ def _append_implicit_hold_operations(
         key = ts_code or asset_name
         if not key or key in existing_keys:
             continue
+        manager_summary = manager_map.get(ts_code) if ts_code else None
+        hold_reason = "本期未给出该持仓操作，系统自动按持有处理"
+        if isinstance(manager_summary, dict):
+            hold_reason = (
+                str(manager_summary.get("signal_reason") or "").strip()
+                or str(manager_summary.get("selection_reason") or "").strip()
+                or hold_reason
+            )
         appended.append(
             {
                 "ts_code": ts_code or None,
                 "asset_name": asset_name,
                 "operation": "持有",
                 "target_weight_pct": _pct_to_float(row.get("仓位")),
-                "reason": "本期未给出该持仓操作，系统自动按持有处理",
+                "reason": hold_reason,
                 "priority": next_priority,
             }
         )
@@ -549,7 +561,7 @@ def _apply_operations_to_table(
         if key:
             old_map[key] = row
 
-    # 计算上日总资产：持仓按当日开盘价重新估值 + 现金
+    # 计算上日总资产：持仓按当日收盘价重新估值 + 现金
     previous_holding_value = 0.0
     for row in old_table:
         if str(row.get("资产名称")) == "待投资现金":
@@ -557,11 +569,11 @@ def _apply_operations_to_table(
         ts_code = str(row.get("ts_code") or "").strip()
         old_shares = _to_int(row.get("持仓股数"), 0)
         if ts_code and old_shares > 0:
-            open_price = _fetch_open_price(ts_code, trade_date)
-            if open_price is not None and open_price > 0:
-                previous_holding_value += old_shares * open_price
+            close_price = _fetch_close_price(ts_code, trade_date)
+            if close_price is not None and close_price > 0:
+                previous_holding_value += old_shares * close_price
             else:
-                # 无法获取开盘价时，沿用旧市值
+                # 无法获取收盘价时，沿用旧市值
                 previous_holding_value += _to_float(row.get("市值 (元)"), 0.0)
         else:
             previous_holding_value += _to_float(row.get("市值 (元)"), 0.0)
@@ -646,13 +658,13 @@ def _apply_operations_to_table(
         if old_cost <= 0 and old_shares > 0:
             old_cost = _to_float(old.get("市值 (元)"), 0.0) / max(old_shares, 1)
         if old_cost <= 0:
-            old_cost = _to_float(old.get("开盘价"), 0.0)
+            old_cost = _to_float(old.get("收盘价", old.get("开盘价")), 0.0)
         new_w = normalized_weights.get(op_idx, _to_float(op.get("target_weight_pct"), old_w))
         operation = str(op.get("operation") or "持有")
         auto_rebalance_reason: Optional[str] = None
         if operation == "清仓":
             new_w = 0.0
-        open_price = _fetch_open_price(ts_code, trade_date) if ts_code else None
+        close_price = _fetch_close_price(ts_code, trade_date) if ts_code else None
         target_budget = round(total_capital * new_w, 2)
         amount = 0.0
         shares: Any = 0
@@ -672,71 +684,86 @@ def _apply_operations_to_table(
 
         # A股按整手（100股）计算可买股数；再用可成交总价回算真实仓位。
         # 逻辑：四舍五入到最接近目标金额的整手数，让实际成交金额更接近目标金额
-        if operation != "清仓" and open_price is not None and open_price > 0 and ts_code:
+        if operation != "清仓" and close_price is not None and close_price > 0 and ts_code:
             lot_size = 100
 
             if operation == "持有":
-                # 持有：保持原有股数，只按当日开盘价重新估值
+                # 持有：保持原有股数，只按当日收盘价重新估值
                 shares = old_shares if old_shares > 0 else 0
-                amount = round(shares * open_price, 2) if shares > 0 else 0.0
+                amount = round(shares * close_price, 2) if shares > 0 else 0.0
                 actual_w = (amount / total_capital) if total_capital > 0 else 0.0
-                cost_price = old_cost if old_cost > 0 else open_price
+                cost_price = old_cost if old_cost > 0 else close_price
             else:
                 # 建仓/加仓/减仓：根据目标金额计算股数
-                # 计算目标金额能买多少手（向上取整，确保买够目标仓位）
-                target_lots = target_budget / (open_price * lot_size)
-                # 向上取整到整手数（ceiling），确保买够
-                lots = int(target_lots) if target_lots == int(target_lots) else int(target_lots) + 1
-                # 建仓/加仓时：确保至少1手（如果目标金额够买至少1手）
-                if lots <= 0 and target_budget >= open_price * lot_size:
-                    lots = 1
-                # 减仓时：如果目标仓位为0或无法计算，清仓
-                if operation == "减仓" and lots <= 0:
-                    lots = 0
-                tradable_shares = lots * lot_size
-
-                # 处理减仓：如果新计算股数小于原持仓，则为减仓
-                if operation == "减仓" and old_shares > 0 and tradable_shares < old_shares:
-                    # 判断是否为极小幅减仓：如果剩余股数<=1手或减仓幅度<5%，转为清仓
-                    min_hold_lots = 2  # 最少保留2手（200股），否则直接清仓
-                    reduced_lots = (old_shares - tradable_shares) / lot_size
-                    old_lots = old_shares / lot_size
-                    # 如果减仓后剩余不足2手，或减仓不到1手，或减仓比例<5%，直接清仓
-                    if tradable_shares < min_hold_lots * lot_size or reduced_lots < 1 or (reduced_lots / old_lots < 0.05):
-                        shares = 0
-                        amount = 0.0
-                        actual_w = 0.0
-                        operation = "清仓"  # 转为清仓操作
-                    else:
-                        shares = tradable_shares
-                        amount = round(shares * open_price, 2)
-                        actual_w = (amount / total_capital) if total_capital > 0 else 0.0
-                    cost_price = old_cost if old_cost > 0 else open_price  # 减仓后成本价不变
-                elif operation == "加仓" and old_shares > 0 and tradable_shares > old_shares:
-                    # 加仓：按旧仓+新增仓做加权成本
-                    shares = tradable_shares
-                    amount = round(shares * open_price, 2)
-                    actual_w = (amount / total_capital) if total_capital > 0 else 0.0
-                    add_shares = shares - old_shares
-                    base_cost = old_cost if old_cost > 0 else open_price
-                    cost_price = ((old_shares * base_cost) + (add_shares * open_price)) / max(shares, 1)
+                # 若当前仅 1 手持仓且给出“减仓”，按业务规则直接清仓
+                if operation == "减仓" and old_shares <= lot_size:
+                    shares = 0
+                    amount = 0.0
+                    actual_w = 0.0
+                    operation = "清仓"
+                    cost_price = old_cost if old_cost > 0 else close_price
+                    auto_rebalance_reason = (
+                        f"{auto_rebalance_reason}；当前仅1手持仓，减仓自动转为清仓"
+                        if auto_rebalance_reason
+                        else "当前仅1手持仓，减仓自动转为清仓"
+                    )
+                    # 该分支已完成处理，跳过后续按目标金额计算
+                    tradable_shares = 0
                 else:
-                    # 建仓或其他情况
-                    shares = tradable_shares
-                    amount = round(tradable_shares * open_price, 2)
-                    actual_w = (amount / total_capital) if total_capital > 0 else 0.0
-                    if old_shares <= 0 or operation == "建仓":
-                        cost_price = open_price
+                    # 计算目标金额能买多少手（向上取整，确保买够目标仓位）
+                    target_lots = target_budget / (close_price * lot_size)
+                    # 向上取整到整手数（ceiling），确保买够
+                    lots = int(target_lots) if target_lots == int(target_lots) else int(target_lots) + 1
+                    # 建仓/加仓时：确保至少1手（如果目标金额够买至少1手）
+                    if lots <= 0 and target_budget >= close_price * lot_size:
+                        lots = 1
+                    # 减仓时：如果目标仓位为0或无法计算，清仓
+                    if operation == "减仓" and lots <= 0:
+                        lots = 0
+                    tradable_shares = lots * lot_size
+
+                    # 处理减仓：如果新计算股数小于原持仓，则为减仓
+                    if operation == "减仓" and old_shares > 0 and tradable_shares < old_shares:
+                        # 判断是否为极小幅减仓：如果剩余股数<=1手或减仓幅度<5%，转为清仓
+                        min_hold_lots = 2  # 最少保留2手（200股），否则直接清仓
+                        reduced_lots = (old_shares - tradable_shares) / lot_size
+                        old_lots = old_shares / lot_size
+                        # 如果减仓后剩余不足2手，或减仓仅1手及以下，或减仓比例<5%，直接清仓
+                        if tradable_shares < min_hold_lots * lot_size or reduced_lots <= 1 or (reduced_lots / old_lots < 0.05):
+                            shares = 0
+                            amount = 0.0
+                            actual_w = 0.0
+                            operation = "清仓"  # 转为清仓操作
+                        else:
+                            shares = tradable_shares
+                            amount = round(shares * close_price, 2)
+                            actual_w = (amount / total_capital) if total_capital > 0 else 0.0
+                        cost_price = old_cost if old_cost > 0 else close_price  # 减仓后成本价不变
+                    elif operation == "加仓" and old_shares > 0 and tradable_shares > old_shares:
+                        # 加仓：按旧仓+新增仓做加权成本
+                        shares = tradable_shares
+                        amount = round(shares * close_price, 2)
+                        actual_w = (amount / total_capital) if total_capital > 0 else 0.0
+                        add_shares = shares - old_shares
+                        base_cost = old_cost if old_cost > 0 else close_price
+                        cost_price = ((old_shares * base_cost) + (add_shares * close_price)) / max(shares, 1)
                     else:
-                        cost_price = old_cost if old_cost > 0 else open_price
+                        # 建仓或其他情况
+                        shares = tradable_shares
+                        amount = round(tradable_shares * close_price, 2)
+                        actual_w = (amount / total_capital) if total_capital > 0 else 0.0
+                        if old_shares <= 0 or operation == "建仓":
+                            cost_price = close_price
+                        else:
+                            cost_price = old_cost if old_cost > 0 else close_price
         else:
             shares = 0 if ts_code else "-"
             amount = 0.0
             actual_w = 0.0
             cost_price = None
 
-        if operation == "持有" and open_price is None:
-            # 无开盘价时，持有场景保留原仓位和市值，避免无谓归零。
+        if operation == "持有" and close_price is None:
+            # 无收盘价时，持有场景保留原仓位和市值，避免无谓归零。
             amount = _to_float(old.get("市值 (元)"), 0.0)
             actual_w = old_w
             shares = old.get("持仓股数", "-")
@@ -746,10 +773,10 @@ def _apply_operations_to_table(
             shares = 0 if ts_code else "-"
             cost_price = None
 
-        # 收益计算（持仓维度，按“当日开盘价 vs 成本价”估值）
-        if isinstance(shares, int) and shares > 0 and open_price is not None and cost_price and cost_price > 0:
-            total_pnl = round((open_price - cost_price) * shares, 2)
-            total_ret = (open_price / cost_price - 1.0)
+        # 收益计算（持仓维度，按“当日收盘价 vs 成本价”估值）
+        if isinstance(shares, int) and shares > 0 and close_price is not None and cost_price and cost_price > 0:
+            total_pnl = round((close_price - cost_price) * shares, 2)
+            total_ret = (close_price / cost_price - 1.0)
         else:
             total_pnl = 0.0
             total_ret = 0.0
@@ -777,7 +804,7 @@ def _apply_operations_to_table(
                     "成本价": round(cost_price, 4) if isinstance(cost_price, (int, float)) and cost_price > 0 else None,
                     "总收益 (%)": _fmt_pct(total_ret),
                     "操作": operation,
-                    "开盘价": open_price,
+                    "收盘价": close_price,
                 }
             )
             rank += 1
@@ -789,7 +816,7 @@ def _apply_operations_to_table(
                 "原仓位": _fmt_pct(old_w),
                 "新仓位": _fmt_pct(actual_w),
                 "仓位变化": _fmt_pct(actual_w - old_w),
-                "执行价格(开盘价)": open_price,
+                "执行价格(收盘价)": close_price,
                 "目标金额(元)": target_budget,
                 "实际成交金额(元)": amount,
                 "成交股数": shares,
@@ -815,7 +842,7 @@ def _apply_operations_to_table(
             "持仓股数": "-",
             "成本价": None,
             "操作": "-",
-            "开盘价": None,
+            "收盘价": None,
         }
     )
     return result_rows, op_reason_rows, round(total_capital, 2)
@@ -946,7 +973,11 @@ def create_llm_make_decision_node(llm: Any, stock_manager_graph: Any = None):
                 }
                 return {**state, "decision_result": decision_result}
 
-        operations = _append_implicit_hold_operations(context.get("portfolio_table") or [], operations)
+        operations = _append_implicit_hold_operations(
+            context.get("portfolio_table") or [],
+            operations,
+            manager_map=manager_map,
+        )
 
         target_position_range = _parse_target_position_range((context.get("macro_hint") or {}).get("target_position"))
 

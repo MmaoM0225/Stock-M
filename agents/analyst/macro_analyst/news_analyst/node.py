@@ -211,7 +211,7 @@ def _get_news_sections_by_date(
     date_str: str, finlight_fetcher: Any, use_cache: bool = True
 ) -> tuple:
     """
-    按日期获取新闻 sections，全面使用 Finlight API。
+    按日期获取 Finlight 新闻 sections。
 
     获取指定日期的前一天00:00到当天12:00的新闻数据（跨天时间范围）。
     如果历史日期没有新闻，则回退到“该日期之前最近新闻”（不会使用全局最新新闻）。
@@ -222,7 +222,7 @@ def _get_news_sections_by_date(
         use_cache: 是否使用本地缓存
 
     Returns:
-        (sections, source): sections 列表，source 为 "local"（本地缓存）或 "api"（API 请求）
+        (sections, source): sections 列表，source 为 "finlight_local"（本地缓存）或 "finlight_api"（API 请求）
     """
     try:
         # 解析传入的日期，计算前一天
@@ -256,7 +256,7 @@ def _get_news_sections_by_date(
             cache_file = f"{cache_dir}/news_{date_str}.json"
 
             import os
-            source = "local" if os.path.exists(cache_file) and use_cache else "api"
+            source = "finlight_local" if os.path.exists(cache_file) and use_cache else "finlight_api"
 
             prev_date_str = previous_date.strftime("%Y%m%d")
             logger.info(f"获取 {date_str} 新闻成功（{prev_date_str}00:00到{date_str}12:00），共 {len(sections)} 条 section（来源: {source}）")
@@ -280,17 +280,17 @@ def _get_news_sections_by_date(
 
             if fallback_sections:
                 logger.info("历史日期 %s 回退成功，获取到 %d 条截止当日的最近新闻", date_str, len(fallback_sections))
-                return (fallback_sections, "api")
+                return (fallback_sections, "finlight_api")
 
             logger.warning("历史日期 %s 回退后仍无可用新闻，返回空结果", date_str)
-            return ([], "api")
+            return ([], "finlight_api")
 
     except Exception as e:
         logger.warning(f"获取历史日期新闻失败: {e}，返回空结果")
         import traceback
         logger.debug(traceback.format_exc())
         # 出错时不回退最新新闻，避免历史日期污染
-        return ([], "api")
+        return ([], "finlight_api")
 
 
 def _get_news_sections_latest(
@@ -323,16 +323,75 @@ def _get_news_sections_latest(
         
         if sections:
             logger.info(f"获取最新新闻成功，共 {len(sections)} 条 section")
-            return (sections, "api")
+            return (sections, "finlight_api")
         else:
             logger.warning("获取最新新闻为空")
-            return ([], "api")
+            return ([], "finlight_api")
             
     except Exception as e:
         logger.warning(f"获取最新新闻失败: {e}")
         import traceback
         logger.debug(traceback.format_exc())
-        return ([], "api")
+        return ([], "finlight_api")
+
+
+def _convert_eastmoney_news_to_sections(news_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """将东方财富新闻 JSON 转换为内部 sections 格式。"""
+    sections = news_data.get("sections", []) if isinstance(news_data, dict) else []
+    converted: List[Dict[str, Any]] = []
+    for sec in sections:
+        title = str(sec.get("title", "") or "").strip()
+        content = str(sec.get("content", "") or "").strip()
+        if not title and not content:
+            continue
+        converted.append(
+            {
+                "title": title or "东方财富快讯",
+                "content": content or title,
+                "source": "东方财富",
+                "link": str(news_data.get("url", "") or "").strip(),
+                "publish_date": str(news_data.get("fetch_time", "") or "").strip(),
+            }
+        )
+    return converted
+
+
+def _get_eastmoney_sections_by_date(date_str: str) -> tuple:
+    """按日期读取东方财富新闻并转成 sections。
+
+    优先读取本地缓存 `data/news/news_{date}.json`。
+    若本地不存在，则自动触发抓取并落盘，再回读并转换。
+    """
+    try:
+        from dataflow.news_sentiment import NewsSentimentFetcher
+
+        fetcher = NewsSentimentFetcher()
+        fetched_now = False
+        news_data = fetcher.get_news_by_date(date_str, file_dir="data/news")
+
+        # 本地无缓存时，自动抓取并落盘，避免手工准备 data/news/news_{date}.json
+        if not news_data:
+            logger.info("东方财富本地缓存缺失，尝试自动抓取并落盘: %s", date_str)
+            try:
+                fetcher.fetch_eastmoney_news_by_date(date_str, auto_save=True)
+                fetched_now = True
+            except Exception as fetch_err:
+                logger.warning("自动抓取东方财富新闻失败: %s", fetch_err)
+
+            # 二次回读，确认是否已落盘成功
+            news_data = fetcher.get_news_by_date(date_str, file_dir="data/news")
+
+        if not news_data:
+            return ([], "eastmoney_none")
+        sections = _convert_eastmoney_news_to_sections(news_data)
+        if not sections:
+            return ([], "eastmoney_none")
+        logger.info("东方财富新闻读取成功：%s，共 %d 条 section", date_str, len(sections))
+        source = "eastmoney_fetched" if fetched_now else "eastmoney_local"
+        return (sections, source)
+    except Exception as e:
+        logger.warning("读取东方财富新闻失败: %s", e)
+        return ([], "eastmoney_error")
 
 
 def _get_industry_and_concept_lists() -> tuple:
@@ -382,13 +441,15 @@ def _get_industry_and_concept_lists() -> tuple:
 
 def create_news_fetch_node(finlight_fetcher: Optional[Any] = None):
     """
-    构建新闻获取节点（全面使用 Finlight API）。
+    构建新闻获取节点（融合东方财富 + Finlight）。
 
     流程：
     1. 判断 trade_date 是否为交易日，否则返回空 sections 结束图
-    2. 从 Finlight API 获取新闻（优先本地缓存）
-    3. 获取完整行业列表与同花顺概念列表（DB 优先，否则 dataflow）
-    4. 输出 sections、all_industries、ths_concept_list 供 extract / reduce 节点使用
+    2. 从东方财富本地文件读取新闻（如存在）
+    3. 从 Finlight API 获取新闻（优先本地缓存）
+    4. 合并两路新闻并去重
+    5. 获取完整行业列表与同花顺概念列表（DB 优先，否则 dataflow）
+    6. 输出 sections、all_industries、ths_concept_list 供 extract / reduce 节点使用
 
     Args:
         finlight_fetcher: FinlightDataFetcher 实例（可选，如未提供则自动创建）
@@ -412,6 +473,7 @@ def create_news_fetch_node(finlight_fetcher: Optional[Any] = None):
                 "messages": [{"type": "skip", "reason": "非交易日", "trade_date": current_date}],
                 "trade_date": current_date,
                 "news_sections": [],
+                "news_source": "trading_day_skip",
             }
 
         # 2. 检查 fetcher
@@ -421,33 +483,50 @@ def create_news_fetch_node(finlight_fetcher: Optional[Any] = None):
                 "messages": [{"type": "skip", "reason": "未配置 fetcher", "trade_date": current_date}],
                 "trade_date": current_date,
                 "news_sections": [],
+                "news_source": "fetcher_missing",
             }
 
-        # 3. 从 Finlight API 获取新闻（优先本地缓存）
+        # 3. 获取东方财富本地新闻（可缺省，不阻塞主流程）
+        eastmoney_sections, eastmoney_source = _get_eastmoney_sections_by_date(current_date)
+
+        # 4. 从 Finlight API 获取新闻（优先本地缓存）
         try:
             # 判断是否为今日，如果是则获取最新新闻（不限定日期）
             today = datetime.now().strftime("%Y%m%d")
             if current_date == today:
                 # 获取最新新闻（不限定具体日期）
                 logger.info(f"获取今日最新新闻: {current_date}")
-                sections, news_source = _get_news_sections_latest(finlight_fetcher, use_cache=True)
+                finlight_sections, finlight_source = _get_news_sections_latest(finlight_fetcher, use_cache=True)
             else:
                 # 获取指定日期的新闻
-                sections, news_source = _get_news_sections_by_date(current_date, finlight_fetcher, use_cache=True)
+                finlight_sections, finlight_source = _get_news_sections_by_date(current_date, finlight_fetcher, use_cache=True)
         except Exception as e:
             logger.warning(f"获取新闻失败: {e}")
             import traceback
             logger.debug(traceback.format_exc())
-            sections, news_source = [], "api"
+            finlight_sections, finlight_source = [], "finlight_api"
+
+        # 5. 合并两路数据并去重
+        sections = _deduplicate_sections([*eastmoney_sections, *finlight_sections])
+        source_tokens = [eastmoney_source, finlight_source]
+        news_source = "+".join([x for x in source_tokens if x and not x.endswith("_none")]) or "unknown"
+        logger.info(
+            "新闻聚合完成：东方财富 %d 条，Finlight %d 条，合并后 %d 条，来源=%s",
+            len(eastmoney_sections),
+            len(finlight_sections),
+            len(sections),
+            news_source,
+        )
 
         if not sections:
             return {
                 "messages": [{"type": "skip", "reason": "获取新闻失败", "trade_date": current_date}],
                 "trade_date": current_date,
                 "news_sections": [],
+                "news_source": news_source,
             }
 
-        # 4. 获取行业列表与同花顺概念列表，供 extract / reduce 节点（LLM 从中选择）
+        # 6. 获取行业列表与同花顺概念列表，供 extract / reduce 节点（LLM 从中选择）
         all_industries, ths_concept_list = _get_industry_and_concept_lists()
         logger.info(
             "新闻分析：已注入行业列表 %d 条、同花顺概念列表 %d 条供 LLM 选用",

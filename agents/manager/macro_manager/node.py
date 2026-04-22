@@ -23,7 +23,6 @@ _MACRO_MANAGER_ARTIFACT_ROOT = Path("data") / "artifacts" / "manager" / "macro_m
 _MACRO_ANALYST_ARTIFACT_DIRS: Dict[str, str] = {
     "news": "news_analyst",
     "market_sentiment": "market_sentiment_analyst",
-    "liquidity": "liquidity_analyst",
     "commodity": "commodity_analyst",
     "macro_economist": "macro_economist",
 }
@@ -248,14 +247,13 @@ def create_macro_summary_node(llm=None):
             "ths_concept_list": ths_concept_list,
             "news_analysis": state.get("news_analysis"),
             "market_sentiment": state.get("market_sentiment_analyst_summary"),
-            "liquidity": state.get("liquidity_analyst_summary"),
             "commodity": state.get("commodity_analyst_summary"),
             "macro_economy": state.get("macro_economist_analysis"),
         }
 
         system_msg = """你是一位宏观资产配置经理（Macro Portfolio Manager）。
 
-你会收到**某一天**（trade_date）的五个分析师结构化结果：新闻分析、市场情绪、流动性、大宗商品、宏观经济。
+你会收到**某一天**（trade_date）的四个分析师结构化结果：新闻分析、市场情绪、大宗商品、宏观经济。
 你的任务：**仅基于当日这份数据**综合判断，给出该日的市场状态与配置建议，并返回严格 JSON。
 
 重要约束：
@@ -264,12 +262,12 @@ def create_macro_summary_node(llm=None):
 - **focus_concept_sectors**：必须从下方 **ths_concept_list** 中选取。结合当日各分析师结论输出 2～6 个概念名，无则 []。不可自造概念名。
 - **avoid_sectors**：从当日新闻利空板块、宏观/情绪中的谨慎领域提炼，无则 []。
 - **macro_themes**：从当日新闻主题、商品走势、宏观结论提炼，无则 []。
-- **risk_factors**：从当日新闻事件、宏观/流动性结论中提炼具体风险，无则 []。
+- **risk_factors**：从当日新闻事件、宏观结论中提炼具体风险，无则 []。
 - 不同交易日输入不同，输出必须随当日数据变化。
 
 JSON 结构（focus_industry_sectors / focus_concept_sectors 必须从下方对应列表中选取）：
 {{
-  "market_regime": "从当日 liquidity/macro_economy 等综合得出的状态",
+  "market_regime": "从当日 macro_economy/market_sentiment/news 等综合得出的状态",
   "market_direction": "neutral | bullish | bearish",
   "target_position": "建议仓位区间，如 20%-40%、50%-70%、80%-100% 等具体百分比范围",
   "focus_industry_sectors": ["从 industry_list 中选取的行业名"],

@@ -249,20 +249,7 @@ API 前缀：`/api/v1/agents`
 }
 ```
 
-### 3.15 运行流动性 Analyst
-
-- `POST /api/v1/agents/analyst/macro/liquidity/run`
-
-请求体：
-
-```json
-{
-  "trade_date": "20260420",
-  "force": false
-}
-```
-
-### 3.16 运行大宗商品 Analyst
+### 3.15 运行大宗商品 Analyst
 
 - `POST /api/v1/agents/analyst/macro/commodity/run`
 
@@ -281,7 +268,7 @@ API 前缀：`/api/v1/agents`
 
 - Stock Analyst：`fundamental`、`technical`、`screener`
 - Sector Analyst：`trend`、`capital-flow`
-- Macro Analyst：`economist`、`news`、`market-sentiment`、`liquidity`、`commodity`
+- Macro Analyst：`economist`、`news`、`market-sentiment`、`commodity`
 
 ## 5. 注意事项
 

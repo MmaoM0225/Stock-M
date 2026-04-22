@@ -24,7 +24,7 @@ class NewsState(TypedDict, total=False):
 
     trade_date: str
     news_sections: List[Dict[str, Any]]
-    news_source: str  # "local" 或 "fetch"
+    news_source: str  # 组合来源，如 "eastmoney_local+finlight_local"
     all_industries: List[str]
     ths_concept_list: List[str]  # 同花顺概念列表，与 all_industries 一并供 LLM 选用
     section: Dict[str, Any]
@@ -37,10 +37,10 @@ class NewsState(TypedDict, total=False):
 
 def create_news_graph(llm, finlight_fetcher: Optional[Any] = None):
     """
-    构建新闻分析子图（map-reduce 风格，全面使用 Finlight API）。
+    构建新闻分析子图（map-reduce 风格，融合东方财富 + Finlight）。
 
     流程：
-    1. news_fetch：判断交易日 → 从 Finlight API 获取新闻（优先本地缓存） → 获取完整行业列表
+    1. news_fetch：判断交易日 → 聚合东方财富/Finlight 新闻（含去重）→ 获取完整行业列表
     2. map_sections_to_extract：根据 news_sections 动态生成并行的 news_extract 调用（Send）
     3. news_extract：对单条新闻 section 抽取结构化事件（LLM 判断），写入 events
     4. news_reduce：对所有 events 做板块与宏观环境汇总，写入 news_analysis

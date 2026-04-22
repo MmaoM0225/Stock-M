@@ -112,14 +112,6 @@ def get_market_sentiment(trade_date: str, service: DataService = Depends(get_dat
         _handle_not_found(e)
 
 
-@router.get("/analyst/macro/liquidity/{trade_date}", response_model=APIResponse)
-def get_liquidity(trade_date: str, service: DataService = Depends(get_data_service)) -> APIResponse:
-    try:
-        return APIResponse(data=service.get_analyst_result("macro_analyst", "liquidity_analyst", trade_date))
-    except FileNotFoundError as e:
-        _handle_not_found(e)
-
-
 @router.get("/analyst/macro/commodity/{trade_date}", response_model=APIResponse)
 def get_commodity(trade_date: str, service: DataService = Depends(get_data_service)) -> APIResponse:
     try:

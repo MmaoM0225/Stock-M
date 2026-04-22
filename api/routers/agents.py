@@ -107,11 +107,6 @@ def run_market_sentiment(req: BaseRunRequest, service: AgentService = Depends(ge
     return APIResponse(data=service.run_market_sentiment(req.trade_date, req.force))
 
 
-@router.post("/analyst/macro/liquidity/run", response_model=APIResponse)
-def run_liquidity(req: BaseRunRequest, service: AgentService = Depends(get_agent_service)) -> APIResponse:
-    return APIResponse(data=service.run_liquidity(req.trade_date, req.force))
-
-
 @router.post("/analyst/macro/commodity/run", response_model=APIResponse)
 def run_commodity(req: BaseRunRequest, service: AgentService = Depends(get_agent_service)) -> APIResponse:
     return APIResponse(data=service.run_commodity(req.trade_date, req.force))
