@@ -6,12 +6,20 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 from database.models import (
+    MacroManagerKey,
     CommodityAnalystKey,
     MacroEconomistKey,
     MarketSentimentAnalystKey,
     NewsAnalystKey,
+    PortfolioDecisionKey,
     SectorCapitalFlowAnalystKey,
+    SectorManagerKey,
     SectorTrendAnalystKey,
+    StockFundamentalAnalystKey,
+    StockManagerKey,
+    StockPoolManagerKey,
+    StockScreenerKey,
+    StockTechnicalAnalystKey,
 )
 
 DEFAULT_COMMODITY_META: List[Dict[str, str]] = [
@@ -49,9 +57,36 @@ class DataService:
     def _load_artifact(self, path: Path) -> Dict[str, Any]:
         return {"artifact_path": str(path.relative_to(self.project_root)), "result": self._load_json(path)}
 
-    def get_macro_result(self, trade_date: str) -> Dict[str, Any]:
-        path = self.artifacts_root / "manager" / "macro_manager" / trade_date / "result.json"
+    def _load_artifact_from_result_path(self, result_path: Optional[str]) -> Dict[str, Any]:
+        if not result_path:
+            raise FileNotFoundError("result_path is missing in database row")
+        path = self.project_root / str(result_path)
         return self._load_artifact(path)
+
+    def _load_json_from_result_path(self, result_path: Optional[str]) -> Dict[str, Any]:
+        if not result_path:
+            raise FileNotFoundError("result_path is missing in database row")
+        path = self.project_root / str(result_path)
+        return self._load_json(path)
+
+    def _parse_portfolio_version_from_run_id(self, run_id: Any) -> str:
+        text = str(run_id or "").strip()
+        if not text.startswith("portfolio_decision:"):
+            return "default"
+        parts = text.split(":")
+        if len(parts) >= 3:
+            return parts[1] or "default"
+        return "default"
+
+    def get_macro_result(self, trade_date: str) -> Dict[str, Any]:
+        row = (
+            self.db.query(MacroManagerKey)
+            .filter(MacroManagerKey.trade_date == trade_date)
+            .first()
+        )
+        if not row:
+            raise FileNotFoundError(f"macro_manager result not found in db: {trade_date}")
+        return self._load_artifact_from_result_path(row.result_path)
 
     def get_macro_manager_result(self, trade_date: str) -> Dict[str, Any]:
         payload = self.get_macro_result(trade_date)
@@ -63,12 +98,24 @@ class DataService:
         return {"trade_date": trade_date, **mapped}
 
     def get_sector_result(self, trade_date: str) -> Dict[str, Any]:
-        path = self.artifacts_root / "manager" / "sector_manager" / trade_date / "result.json"
-        return self._load_artifact(path)
+        row = (
+            self.db.query(SectorManagerKey)
+            .filter(SectorManagerKey.trade_date == trade_date)
+            .first()
+        )
+        if not row:
+            raise FileNotFoundError(f"sector_manager result not found in db: {trade_date}")
+        return self._load_artifact_from_result_path(row.result_path)
 
     def get_sector_manager_result(self, trade_date: str) -> Dict[str, Any]:
-        path = self.artifacts_root / "manager" / "sector_manager" / trade_date / "result.json"
-        raw = self._load_json(path)
+        row = (
+            self.db.query(SectorManagerKey)
+            .filter(SectorManagerKey.trade_date == trade_date)
+            .first()
+        )
+        if not row:
+            raise FileNotFoundError(f"sector_manager result not found in db: {trade_date}")
+        raw = self._load_json_from_result_path(row.result_path)
         if not isinstance(raw, dict):
             raw = {}
         favored = raw.get("favored_sectors")
@@ -89,12 +136,24 @@ class DataService:
         }
 
     def get_screener_result(self, trade_date: str) -> Dict[str, Any]:
-        path = self.artifacts_root / "analyst" / "stock_analyst" / "stock_screener" / trade_date / "result.json"
-        return self._load_artifact(path)
+        row = (
+            self.db.query(StockScreenerKey)
+            .filter(StockScreenerKey.trade_date == trade_date)
+            .first()
+        )
+        if not row:
+            raise FileNotFoundError(f"stock_screener result not found in db: {trade_date}")
+        return self._load_artifact_from_result_path(row.result_path)
 
     def get_stock_screener_api_result(self, trade_date: str) -> Dict[str, Any]:
-        path = self.artifacts_root / "analyst" / "stock_analyst" / "stock_screener" / trade_date / "result.json"
-        raw = self._load_json(path)
+        row = (
+            self.db.query(StockScreenerKey)
+            .filter(StockScreenerKey.trade_date == trade_date)
+            .first()
+        )
+        if not row:
+            raise FileNotFoundError(f"stock_screener result not found in db: {trade_date}")
+        raw = self._load_json_from_result_path(row.result_path)
         if not isinstance(raw, dict):
             raw = {}
         stocks = raw.get("filtered_stocks")
@@ -126,12 +185,24 @@ class DataService:
         }
 
     def get_stock_pool_result(self, trade_date: str) -> Dict[str, Any]:
-        path = self.artifacts_root / "manager" / "stock_pool_manager" / trade_date / "result.json"
-        return self._load_artifact(path)
+        row = (
+            self.db.query(StockPoolManagerKey)
+            .filter(StockPoolManagerKey.trade_date == trade_date)
+            .first()
+        )
+        if not row:
+            raise FileNotFoundError(f"stock_pool_manager result not found in db: {trade_date}")
+        return self._load_artifact_from_result_path(row.result_path)
 
     def get_stock_pool_api_result(self, trade_date: str) -> Dict[str, Any]:
-        path = self.artifacts_root / "manager" / "stock_pool_manager" / trade_date / "result.json"
-        raw = self._load_json(path)
+        row = (
+            self.db.query(StockPoolManagerKey)
+            .filter(StockPoolManagerKey.trade_date == trade_date)
+            .first()
+        )
+        if not row:
+            raise FileNotFoundError(f"stock_pool_manager result not found in db: {trade_date}")
+        raw = self._load_json_from_result_path(row.result_path)
         if not isinstance(raw, dict):
             raw = {}
 
@@ -198,71 +269,91 @@ class DataService:
         }
 
     def list_manager_dates(self, manager_name: str) -> List[str]:
-        base_dir = self.artifacts_root / "manager" / manager_name
-        dates: List[str] = []
-        if not base_dir.exists():
-            return dates
-        for date_dir in base_dir.iterdir():
-            if date_dir.is_dir() and date_dir.name.isdigit() and len(date_dir.name) == 8:
-                if (date_dir / "result.json").exists():
-                    dates.append(date_dir.name)
-        return sorted(dates, reverse=True)
+        model_map = {
+            "macro_manager": MacroManagerKey,
+            "sector_manager": SectorManagerKey,
+            "stock_pool_manager": StockPoolManagerKey,
+        }
+        model = model_map.get(manager_name)
+        if model is None:
+            return []
+        rows = self.db.query(model.trade_date).distinct().order_by(model.trade_date.desc()).all()
+        return [str(r[0]) for r in rows if r and r[0]]
 
-    def _latest_decision_version(self) -> Path:
-        versions = sorted([p for p in self.decision_root.iterdir() if p.is_dir()]) if self.decision_root.exists() else []
+    def _latest_decision_version(self) -> str:
+        rows = self.db.query(PortfolioDecisionKey.run_id).all()
+        versions = sorted(
+            {
+                self._parse_portfolio_version_from_run_id(r[0])
+                for r in rows
+                if r and r[0]
+            }
+        )
         if not versions:
             raise FileNotFoundError("decision version directory not found")
         return versions[-1]
 
     def get_portfolio_result(self, trade_date: str) -> Dict[str, Any]:
-        version_dir = self._latest_decision_version()
-        path = version_dir / "portfolio" / trade_date / "result.json"
-        return self._load_artifact(path)
+        version = self._latest_decision_version()
+        rows = (
+            self.db.query(PortfolioDecisionKey)
+            .filter(PortfolioDecisionKey.trade_date == trade_date)
+            .all()
+        )
+        row = next(
+            (
+                x
+                for x in rows
+                if self._parse_portfolio_version_from_run_id(x.run_id) == version
+            ),
+            None,
+        )
+        if not row:
+            raise FileNotFoundError(f"portfolio result not found in db: {version}/{trade_date}")
+        return self._load_artifact_from_result_path(row.result_path)
 
     def list_portfolio_versions(self) -> List[str]:
-        versions: List[str] = []
-        if not self.decision_root.exists():
-            return versions
-        for version_dir in self.decision_root.iterdir():
-            if not version_dir.is_dir():
-                continue
-            portfolio_dir = version_dir / "portfolio"
-            if not portfolio_dir.exists() or not portfolio_dir.is_dir():
-                continue
-            has_result = False
-            for date_dir in portfolio_dir.iterdir():
-                if date_dir.is_dir() and (date_dir / "result.json").exists():
-                    has_result = True
-                    break
-            if has_result:
-                versions.append(version_dir.name)
+        rows = self.db.query(PortfolioDecisionKey.run_id).all()
+        versions = {
+            self._parse_portfolio_version_from_run_id(r[0])
+            for r in rows
+            if r and r[0]
+        }
         return sorted(versions, reverse=True)
 
     def _portfolio_version_dir(self, version: str) -> Path:
-        version_dir = self.decision_root / version
-        if not version_dir.exists() or not version_dir.is_dir():
-            raise FileNotFoundError(f"portfolio version not found: {version}")
-        return version_dir
+        # 保留接口兼容；数据库模式不再依赖目录探测。
+        return self.decision_root / version
 
     def list_portfolio_dates_by_version(self, version: str) -> List[str]:
-        version_dir = self._portfolio_version_dir(version)
-        portfolio_dir = version_dir / "portfolio"
-        dates: List[str] = []
-        if not portfolio_dir.exists() or not portfolio_dir.is_dir():
-            return dates
-        for date_dir in portfolio_dir.iterdir():
-            if date_dir.is_dir() and date_dir.name.isdigit() and len(date_dir.name) == 8:
-                if (date_dir / "result.json").exists():
-                    dates.append(date_dir.name)
-        return sorted(dates, reverse=True)
+        rows = self.db.query(PortfolioDecisionKey.trade_date, PortfolioDecisionKey.run_id).all()
+        dates = [
+            str(trade_date)
+            for trade_date, run_id in rows
+            if trade_date and self._parse_portfolio_version_from_run_id(run_id) == version
+        ]
+        return sorted(set(dates), reverse=True)
 
     def get_portfolio_api_result(self, version: str, trade_date: str) -> Dict[str, Any]:
         normalized_date = self._normalize_trade_date(trade_date)
         if not normalized_date:
             raise ValueError("trade_date is required")
-        version_dir = self._portfolio_version_dir(version)
-        path = version_dir / "portfolio" / normalized_date / "result.json"
-        raw = self._load_json(path)
+        rows = (
+            self.db.query(PortfolioDecisionKey)
+            .filter(PortfolioDecisionKey.trade_date == normalized_date)
+            .all()
+        )
+        row = next(
+            (
+                x
+                for x in rows
+                if self._parse_portfolio_version_from_run_id(x.run_id) == version
+            ),
+            None,
+        )
+        if not row:
+            raise FileNotFoundError(f"portfolio result not found in db: {version}/{normalized_date}")
+        raw = self._load_json_from_result_path(row.result_path)
         if not isinstance(raw, dict):
             raw = {}
 
@@ -336,42 +427,44 @@ class DataService:
         }
 
     def get_stock_manager_result(self, ts_code: str, trade_date: str) -> Dict[str, Any]:
-        path = self.artifacts_root / "manager" / "stock_manager" / ts_code / trade_date / "result.json"
-        return self._load_artifact(path)
+        row = (
+            self.db.query(StockManagerKey)
+            .filter(
+                StockManagerKey.ts_code == ts_code,
+                StockManagerKey.trade_date == trade_date,
+            )
+            .first()
+        )
+        if not row:
+            raise FileNotFoundError(f"stock_manager result not found in db: {ts_code}/{trade_date}")
+        return self._load_artifact_from_result_path(row.result_path)
 
     def list_stock_manager_ts_codes(self) -> List[str]:
-        base_dir = self.artifacts_root / "manager" / "stock_manager"
-        ts_codes: List[str] = []
-        if not base_dir.exists():
-            return ts_codes
-        for code_dir in base_dir.iterdir():
-            if not code_dir.is_dir():
-                continue
-            has_result = False
-            for date_dir in code_dir.iterdir():
-                if not date_dir.is_dir():
-                    continue
-                if (date_dir / "result.json").exists():
-                    has_result = True
-                    break
-            if has_result:
-                ts_codes.append(code_dir.name)
-        return sorted(ts_codes)
+        rows = self.db.query(StockManagerKey.ts_code).distinct().order_by(StockManagerKey.ts_code.asc()).all()
+        return [str(r[0]) for r in rows if r and r[0]]
 
     def list_stock_manager_dates(self, ts_code: str) -> List[str]:
-        base_dir = self.artifacts_root / "manager" / "stock_manager" / ts_code
-        dates: List[str] = []
-        if not base_dir.exists():
-            return dates
-        for date_dir in base_dir.iterdir():
-            if date_dir.is_dir() and date_dir.name.isdigit() and len(date_dir.name) == 8:
-                if (date_dir / "result.json").exists():
-                    dates.append(date_dir.name)
-        return sorted(dates, reverse=True)
+        rows = (
+            self.db.query(StockManagerKey.trade_date)
+            .filter(StockManagerKey.ts_code == ts_code)
+            .distinct()
+            .order_by(StockManagerKey.trade_date.desc())
+            .all()
+        )
+        return [str(r[0]) for r in rows if r and r[0]]
 
     def get_stock_manager_api_result(self, ts_code: str, trade_date: str) -> Dict[str, Any]:
-        path = self.artifacts_root / "manager" / "stock_manager" / ts_code / trade_date / "result.json"
-        raw = self._load_json(path)
+        row = (
+            self.db.query(StockManagerKey)
+            .filter(
+                StockManagerKey.ts_code == ts_code,
+                StockManagerKey.trade_date == trade_date,
+            )
+            .first()
+        )
+        if not row:
+            raise FileNotFoundError(f"stock_manager result not found in db: {ts_code}/{trade_date}")
+        raw = self._load_json_from_result_path(row.result_path)
         if not isinstance(raw, dict):
             raw = {}
         summary = raw.get("stock_manager_summary")
@@ -402,60 +495,49 @@ class DataService:
         }
 
     def get_fundamental_result(self, ts_code: str, trade_date: str) -> Dict[str, Any]:
-        path = (
-            self.artifacts_root
-            / "analyst"
-            / "stock_analyst"
-            / "stock_fundamental_analyst"
-            / ts_code
-            / trade_date
-            / "result.json"
+        row = (
+            self.db.query(StockFundamentalAnalystKey)
+            .filter(
+                StockFundamentalAnalystKey.ts_code == ts_code,
+                StockFundamentalAnalystKey.trade_date == trade_date,
+            )
+            .first()
         )
-        return self._load_artifact(path)
+        if not row:
+            raise FileNotFoundError(f"stock_fundamental result not found in db: {ts_code}/{trade_date}")
+        return self._load_artifact_from_result_path(row.result_path)
 
     def list_fundamental_ts_codes(self) -> List[str]:
-        base_dir = self.artifacts_root / "analyst" / "stock_analyst" / "stock_fundamental_analyst"
-        ts_codes: List[str] = []
-        if not base_dir.exists():
-            return ts_codes
-        for code_dir in base_dir.iterdir():
-            if not code_dir.is_dir():
-                continue
-            has_result = False
-            for date_dir in code_dir.iterdir():
-                if not date_dir.is_dir():
-                    continue
-                if (date_dir / "result.json").exists():
-                    has_result = True
-                    break
-            if has_result:
-                ts_codes.append(code_dir.name)
-        return sorted(ts_codes)
+        rows = (
+            self.db.query(StockFundamentalAnalystKey.ts_code)
+            .distinct()
+            .order_by(StockFundamentalAnalystKey.ts_code.asc())
+            .all()
+        )
+        return [str(r[0]) for r in rows if r and r[0]]
 
     def list_fundamental_dates(self, ts_code: str) -> List[str]:
-        base_dir = (
-            self.artifacts_root / "analyst" / "stock_analyst" / "stock_fundamental_analyst" / ts_code
+        rows = (
+            self.db.query(StockFundamentalAnalystKey.trade_date)
+            .filter(StockFundamentalAnalystKey.ts_code == ts_code)
+            .distinct()
+            .order_by(StockFundamentalAnalystKey.trade_date.desc())
+            .all()
         )
-        dates: List[str] = []
-        if not base_dir.exists():
-            return dates
-        for date_dir in base_dir.iterdir():
-            if date_dir.is_dir() and date_dir.name.isdigit() and len(date_dir.name) == 8:
-                if (date_dir / "result.json").exists():
-                    dates.append(date_dir.name)
-        return sorted(dates, reverse=True)
+        return [str(r[0]) for r in rows if r and r[0]]
 
     def get_fundamental_api_result(self, ts_code: str, trade_date: str) -> Dict[str, Any]:
-        path = (
-            self.artifacts_root
-            / "analyst"
-            / "stock_analyst"
-            / "stock_fundamental_analyst"
-            / ts_code
-            / trade_date
-            / "result.json"
+        row = (
+            self.db.query(StockFundamentalAnalystKey)
+            .filter(
+                StockFundamentalAnalystKey.ts_code == ts_code,
+                StockFundamentalAnalystKey.trade_date == trade_date,
+            )
+            .first()
         )
-        raw = self._load_json(path)
+        if not row:
+            raise FileNotFoundError(f"stock_fundamental result not found in db: {ts_code}/{trade_date}")
+        raw = self._load_json_from_result_path(row.result_path)
         if not isinstance(raw, dict):
             raw = {}
         company_raw = raw.get("company")
@@ -666,58 +748,49 @@ class DataService:
         }
 
     def get_technical_result(self, ts_code: str, trade_date: str) -> Dict[str, Any]:
-        path = (
-            self.artifacts_root
-            / "analyst"
-            / "stock_analyst"
-            / "stock_technical_analyst"
-            / ts_code
-            / trade_date
-            / "result.json"
+        row = (
+            self.db.query(StockTechnicalAnalystKey)
+            .filter(
+                StockTechnicalAnalystKey.ts_code == ts_code,
+                StockTechnicalAnalystKey.trade_date == trade_date,
+            )
+            .first()
         )
-        return self._load_artifact(path)
+        if not row:
+            raise FileNotFoundError(f"stock_technical result not found in db: {ts_code}/{trade_date}")
+        return self._load_artifact_from_result_path(row.result_path)
 
     def list_technical_ts_codes(self) -> List[str]:
-        base_dir = self.artifacts_root / "analyst" / "stock_analyst" / "stock_technical_analyst"
-        ts_codes: List[str] = []
-        if not base_dir.exists():
-            return ts_codes
-        for code_dir in base_dir.iterdir():
-            if not code_dir.is_dir():
-                continue
-            has_result = False
-            for date_dir in code_dir.iterdir():
-                if not date_dir.is_dir():
-                    continue
-                if (date_dir / "result.json").exists():
-                    has_result = True
-                    break
-            if has_result:
-                ts_codes.append(code_dir.name)
-        return sorted(ts_codes)
+        rows = (
+            self.db.query(StockTechnicalAnalystKey.ts_code)
+            .distinct()
+            .order_by(StockTechnicalAnalystKey.ts_code.asc())
+            .all()
+        )
+        return [str(r[0]) for r in rows if r and r[0]]
 
     def list_technical_dates(self, ts_code: str) -> List[str]:
-        base_dir = self.artifacts_root / "analyst" / "stock_analyst" / "stock_technical_analyst" / ts_code
-        dates: List[str] = []
-        if not base_dir.exists():
-            return dates
-        for date_dir in base_dir.iterdir():
-            if date_dir.is_dir() and date_dir.name.isdigit() and len(date_dir.name) == 8:
-                if (date_dir / "result.json").exists():
-                    dates.append(date_dir.name)
-        return sorted(dates, reverse=True)
+        rows = (
+            self.db.query(StockTechnicalAnalystKey.trade_date)
+            .filter(StockTechnicalAnalystKey.ts_code == ts_code)
+            .distinct()
+            .order_by(StockTechnicalAnalystKey.trade_date.desc())
+            .all()
+        )
+        return [str(r[0]) for r in rows if r and r[0]]
 
     def get_technical_api_result(self, ts_code: str, trade_date: str) -> Dict[str, Any]:
-        path = (
-            self.artifacts_root
-            / "analyst"
-            / "stock_analyst"
-            / "stock_technical_analyst"
-            / ts_code
-            / trade_date
-            / "result.json"
+        row = (
+            self.db.query(StockTechnicalAnalystKey)
+            .filter(
+                StockTechnicalAnalystKey.ts_code == ts_code,
+                StockTechnicalAnalystKey.trade_date == trade_date,
+            )
+            .first()
         )
-        raw = self._load_json(path)
+        if not row:
+            raise FileNotFoundError(f"stock_technical result not found in db: {ts_code}/{trade_date}")
+        raw = self._load_json_from_result_path(row.result_path)
         if not isinstance(raw, dict):
             raw = {}
 
@@ -794,8 +867,22 @@ class DataService:
         }
 
     def get_analyst_result(self, group: str, analyst: str, trade_date: str) -> Dict[str, Any]:
-        path = self.artifacts_root / "analyst" / group / analyst / trade_date / "result.json"
-        return self._load_artifact(path)
+        model_map = {
+            ("macro_analyst", "macro_economist"): MacroEconomistKey,
+            ("macro_analyst", "market_sentiment_analyst"): MarketSentimentAnalystKey,
+            ("macro_analyst", "news_analyst"): NewsAnalystKey,
+            ("macro_analyst", "commodity_analyst"): CommodityAnalystKey,
+            ("sector_analyst", "sector_trend_analyst"): SectorTrendAnalystKey,
+            ("sector_analyst", "sector_capital_flow_analyst"): SectorCapitalFlowAnalystKey,
+            ("stock_analyst", "stock_screener"): StockScreenerKey,
+        }
+        model = model_map.get((group, analyst))
+        if model is None:
+            raise FileNotFoundError(f"analyst mapping not found in db: {group}/{analyst}")
+        row = self.db.query(model).filter(model.trade_date == trade_date).first()
+        if not row:
+            raise FileNotFoundError(f"analyst result not found in db: {group}/{analyst}/{trade_date}")
+        return self._load_artifact_from_result_path(row.result_path)
 
     def get_macro_economist_result(self, trade_date: str) -> Dict[str, Any]:
         db_row = (
@@ -803,12 +890,9 @@ class DataService:
             .filter(MacroEconomistKey.trade_date == trade_date)
             .first()
         )
-        if db_row and db_row.result_path:
-            result_path = self.project_root / str(db_row.result_path)
-            llm_output = self._load_json(result_path)
-        else:
-            llm_payload = self.get_analyst_result("macro_analyst", "macro_economist", trade_date)
-            llm_output = llm_payload.get("result", {})
+        if not db_row or not db_row.result_path:
+            raise FileNotFoundError(f"macro_economist result not found in db: {trade_date}")
+        llm_output = self._load_json_from_result_path(db_row.result_path)
         if not isinstance(llm_output, dict):
             llm_output = {}
 
@@ -837,12 +921,9 @@ class DataService:
             .filter(MarketSentimentAnalystKey.trade_date == trade_date)
             .first()
         )
-        if db_row and db_row.result_path:
-            result_path = self.project_root / str(db_row.result_path)
-            result = self._load_json(result_path)
-        else:
-            payload = self.get_analyst_result("macro_analyst", "market_sentiment_analyst", trade_date)
-            result = payload.get("result", {})
+        if not db_row or not db_row.result_path:
+            raise FileNotFoundError(f"market_sentiment_analyst result not found in db: {trade_date}")
+        result = self._load_json_from_result_path(db_row.result_path)
         if not isinstance(result, dict):
             result = {}
 
@@ -895,12 +976,9 @@ class DataService:
             .filter(SectorTrendAnalystKey.trade_date == trade_date)
             .first()
         )
-        if db_row and db_row.result_path:
-            result_path = self.project_root / str(db_row.result_path)
-            result = self._load_json(result_path)
-        else:
-            payload = self.get_analyst_result("sector_analyst", "sector_trend_analyst", trade_date)
-            result = payload.get("result", {})
+        if not db_row or not db_row.result_path:
+            raise FileNotFoundError(f"sector_trend_analyst result not found in db: {trade_date}")
+        result = self._load_json_from_result_path(db_row.result_path)
         if not isinstance(result, dict):
             result = {}
 
@@ -959,12 +1037,9 @@ class DataService:
             .filter(SectorCapitalFlowAnalystKey.trade_date == trade_date)
             .first()
         )
-        if db_row and db_row.result_path:
-            result_path = self.project_root / str(db_row.result_path)
-            result = self._load_json(result_path)
-        else:
-            payload = self.get_analyst_result("sector_analyst", "sector_capital_flow_analyst", trade_date)
-            result = payload.get("result", {})
+        if not db_row or not db_row.result_path:
+            raise FileNotFoundError(f"sector_capital_flow_analyst result not found in db: {trade_date}")
+        result = self._load_json_from_result_path(db_row.result_path)
         if not isinstance(result, dict):
             result = {}
 
@@ -1014,12 +1089,9 @@ class DataService:
             .filter(CommodityAnalystKey.trade_date == trade_date)
             .first()
         )
-        if db_row and db_row.result_path:
-            result_path = self.project_root / str(db_row.result_path)
-            result = self._load_json(result_path)
-        else:
-            payload = self.get_analyst_result("macro_analyst", "commodity_analyst", trade_date)
-            result = payload.get("result", {})
+        if not db_row or not db_row.result_path:
+            raise FileNotFoundError(f"commodity_analyst result not found in db: {trade_date}")
+        result = self._load_json_from_result_path(db_row.result_path)
         if not isinstance(result, dict):
             result = {}
 
@@ -1066,12 +1138,9 @@ class DataService:
             .filter(NewsAnalystKey.trade_date == trade_date)
             .first()
         )
-        if db_row and db_row.result_path:
-            result_path = self.project_root / str(db_row.result_path)
-            result = self._load_json(result_path)
-        else:
-            payload = self.get_analyst_result("macro_analyst", "news_analyst", trade_date)
-            result = payload.get("result", {})
+        if not db_row or not db_row.result_path:
+            raise FileNotFoundError(f"news_analyst result not found in db: {trade_date}")
+        result = self._load_json_from_result_path(db_row.result_path)
         if not isinstance(result, dict):
             return {}
         return self._map_news_result(result)
@@ -1143,15 +1212,18 @@ class DataService:
             if dates:
                 return dates
 
-        base_dir = self.artifacts_root / "analyst" / group / analyst
-        dates: List[str] = []
-        if not base_dir.exists():
-            return dates
-        for date_dir in base_dir.iterdir():
-            if date_dir.is_dir() and date_dir.name.isdigit() and len(date_dir.name) == 8:
-                if (date_dir / "result.json").exists():
-                    dates.append(date_dir.name)
-        return sorted(dates, reverse=True)
+        if group == "stock_analyst" and analyst == "stock_screener":
+            rows = (
+                self.db.query(StockScreenerKey.trade_date)
+                .distinct()
+                .order_by(StockScreenerKey.trade_date.desc())
+                .all()
+            )
+            dates = [str(r[0]) for r in rows if r and r[0]]
+            if dates:
+                return dates
+
+        return []
 
     def _build_macro_economist_icon_data(self, result: Dict[str, Any]) -> List[Dict[str, str]]:
         field_specs = [
@@ -2028,15 +2100,8 @@ class DataService:
         return result
 
     def list_portfolio_dates(self) -> List[str]:
-        version_dir = self._latest_decision_version() / "portfolio"
-        dates: List[str] = []
-        if not version_dir.exists():
-            return dates
-        for date_dir in version_dir.iterdir():
-            if date_dir.is_dir() and date_dir.name.isdigit() and len(date_dir.name) == 8:
-                if (date_dir / "result.json").exists():
-                    dates.append(date_dir.name)
-        return sorted(dates)
+        latest_version = self._latest_decision_version()
+        return sorted(self.list_portfolio_dates_by_version(latest_version))
 
     def get_latest_portfolio(self) -> Dict[str, Any]:
         dates = self.list_portfolio_dates()
@@ -2082,9 +2147,22 @@ class DataService:
 
     def _get_portfolio_result_by_version(self, version: Optional[str], trade_date: str) -> Dict[str, Any]:
         if version:
-            version_dir = self._portfolio_version_dir(version)
-            path = version_dir / "portfolio" / trade_date / "result.json"
-            return self._load_artifact(path)
+            rows = (
+                self.db.query(PortfolioDecisionKey)
+                .filter(PortfolioDecisionKey.trade_date == trade_date)
+                .all()
+            )
+            row = next(
+                (
+                    x
+                    for x in rows
+                    if self._parse_portfolio_version_from_run_id(x.run_id) == version
+                ),
+                None,
+            )
+            if not row:
+                raise FileNotFoundError(f"portfolio result not found in db: {version}/{trade_date}")
+            return self._load_artifact_from_result_path(row.result_path)
         return self.get_portfolio_result(trade_date)
 
     def get_portfolio_dates_api(self, version: Optional[str] = None) -> Dict[str, Any]:
