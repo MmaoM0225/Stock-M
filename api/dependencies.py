@@ -11,6 +11,7 @@ from database.config import get_session
 
 from api.services.agent_service import AgentService
 from api.services.data_service import DataService
+from api.services.home_service import HomeService
 
 
 @lru_cache()
@@ -43,4 +44,8 @@ def get_agent_service(llm: ChatOpenAI = Depends(get_llm)) -> AgentService:
 
 def get_data_service(db: Session = Depends(get_db)) -> DataService:
     return DataService(db=db)
+
+
+def get_home_service(db: Session = Depends(get_db)) -> HomeService:
+    return HomeService(db=db)
 

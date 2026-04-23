@@ -1042,6 +1042,12 @@ def create_persist_portfolio_decision_node():
                     "result_path": decision_result_path.as_posix(),
                 },
             )
+            try:
+                from database.data_sync.portfolio_decision import sync_single_result
+
+                sync_single_result(decision_result_path)
+            except Exception as sync_err:
+                logger.warning("portfolio_decision 数据库同步失败: %s", sync_err)
             return {
                 **state,
                 "decision_artifact_path": decision_result_path.as_posix(),

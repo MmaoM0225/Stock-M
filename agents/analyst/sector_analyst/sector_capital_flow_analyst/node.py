@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 
 from ....utils import date_offset, to_serializable, extract_json_text
 
+from .capital_flow_api_cache import build_capital_flow_api_snapshot
+
 
 # 最大回溯天数：为了覆盖 20 日窗口，适当多留一些缓冲（自然日）
 SECTOR_MONEYFLOW_LOOKBACK_DAYS =40
@@ -429,7 +431,7 @@ def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
 
 
 def create_sector_capital_flow_result_persist_node():
-    """将最终输出键 sector_capital_flow_insight 持久化到本地 artifacts。"""
+    """将最终输出键 sector_capital_flow_insight 持久化到本地 artifacts，并同步数据库。"""
 
     def _persist_node(
         state: Dict[str, Any],
@@ -446,7 +448,18 @@ def create_sector_capital_flow_result_persist_node():
         manifest_path = artifact_dir / "manifest.json"
 
         try:
-            _write_json_atomic(result_path, insight)
+            # 与 LLM 洞察一并写入轻量缓存：仅 meta + api_snapshot + top，不落盘全量 sector_moneyflow_data
+            payload: Dict[str, Any] = {**insight, "sector_moneyflow_cache": {}}
+            cache_block: Dict[str, Any] = payload["sector_moneyflow_cache"]
+            if isinstance(cache_block, dict):
+                meta = state.get("sector_moneyflow_meta")
+                cache_block["meta"] = meta if isinstance(meta, dict) else {}
+                raw_rows = state.get("sector_moneyflow_data") or []
+                cache_block["api_snapshot"] = build_capital_flow_api_snapshot(raw_rows, trade_date)
+                top = state.get("sector_capital_flow_top")
+                cache_block["sector_capital_flow_top"] = top if isinstance(top, dict) else {}
+
+            _write_json_atomic(result_path, payload)
             _write_json_atomic(
                 manifest_path,
                 {
@@ -458,6 +471,13 @@ def create_sector_capital_flow_result_persist_node():
                     "result_path": result_path.as_posix(),
                 },
             )
+            # 每次运行成功落盘后，立即全量 upsert 到数据库。
+            try:
+                from database.data_sync.sector_capital_flow_analyst import sync_single_result
+
+                sync_single_result(result_path)
+            except Exception as sync_err:
+                logger.warning("sector_capital_flow_analyst 数据库同步失败: %s", sync_err)
             logger.info("sector_capital_flow_insight 已写入本地 artifacts: %s", result_path)
             return {
                 **state,

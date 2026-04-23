@@ -302,7 +302,7 @@ def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
 
 
 def create_macro_economist_result_persist_node():
-    """将最终输出键 macro_economist_analysis 持久化到本地 artifacts。"""
+    """将最终输出键 macro_economist_analysis 持久化到本地 artifacts，并同步数据库。"""
 
     def macro_economist_result_persist_node(
         state: Dict[str, Any],
@@ -331,6 +331,13 @@ def create_macro_economist_result_persist_node():
                     "result_path": result_path.as_posix(),
                 },
             )
+            # 每次运行成功落盘后，立即 upsert 到关键表，保证数据库与 artifacts 同步。
+            try:
+                from database.data_sync.macro_economist import sync_single_result
+
+                sync_single_result(result_path)
+            except Exception as sync_err:
+                logger.warning("macro_economist 数据库同步失败: %s", sync_err)
             logger.info("macro_economist_analysis 已写入本地 artifacts: %s", result_path)
             return {
                 **state,

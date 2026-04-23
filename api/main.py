@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.config import API_PREFIX, API_TITLE, API_VERSION
-from api.routers import agents, data, portfolio, stocks
+from api.routers import agents, data, home, portfolio, stocks
 from api.schemas.base import APIResponse
 
 app = FastAPI(title=API_TITLE, version=API_VERSION)
@@ -19,6 +19,7 @@ app.include_router(agents.router, prefix=API_PREFIX)
 app.include_router(data.router, prefix=API_PREFIX)
 app.include_router(stocks.router, prefix=API_PREFIX)
 app.include_router(portfolio.router, prefix=API_PREFIX)
+app.include_router(home.router, prefix=API_PREFIX)
 
 
 @app.get("/health", response_model=APIResponse, tags=["system"])

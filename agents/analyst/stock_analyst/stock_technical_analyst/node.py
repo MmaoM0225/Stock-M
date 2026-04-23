@@ -361,7 +361,7 @@ def create_detect_technical_cache_node():
 
 
 def create_technical_persist_node():
-    """将技术面分析结果持久化到本地 artifacts。"""
+    """将技术面分析结果持久化到本地 artifacts，并同步数据库主表。"""
 
     def persist_node(
         state: Dict[str, Any],
@@ -413,6 +413,13 @@ def create_technical_persist_node():
                     "result_path": result_path.as_posix(),
                 },
             )
+            # 每次运行成功落盘后，立即 upsert 到 stock_technical 主表。
+            try:
+                from database.data_sync.stock_technical_analyst import sync_single_result
+
+                sync_single_result(result_path)
+            except Exception as sync_err:
+                logger.warning("stock_technical_analyst 数据库同步失败: %s", sync_err)
             logger.info("technical_analyst 结果已持久化: %s", result_path)
             return {
                 **state,

@@ -35,7 +35,15 @@ def _deduplicate_sections(sections: List[Dict[str, Any]]) -> List[Dict[str, Any]
         title = _normalize_text(section.get("title", ""))
         content = _normalize_text(section.get("content", ""))
 
-        key = f"link:{link}" if link else f"text:{title}|{content}"
+        # 修正：东方财富一篇早餐文章会拆成多个 section，link 相同但内容不同。
+        # 若仅按 link 去重会把大量有效 section 错误合并为 1 条。
+        # 这里改为优先使用 link + title + content 的复合键，仅在文本缺失时回退 link。
+        if link and (title or content):
+            key = f"link_text:{link}|{title}|{content}"
+        elif link:
+            key = f"link:{link}"
+        else:
+            key = f"text:{title}|{content}"
         if key in seen_keys:
             duplicate_count += 1
             continue
@@ -506,6 +514,15 @@ def create_news_fetch_node(finlight_fetcher: Optional[Any] = None):
             logger.debug(traceback.format_exc())
             finlight_sections, finlight_source = [], "finlight_api"
 
+        # 4.1 Finlight 有数据时，立即同步到 finlight_news 表（按日期 upsert）
+        if finlight_sections:
+            try:
+                from database.data_sync.news_finlight import sync_finlight_news
+
+                sync_finlight_news()
+            except Exception as sync_err:
+                logger.warning("Finlight 新闻数据库同步失败: %s", sync_err)
+
         # 5. 合并两路数据并去重
         sections = _deduplicate_sections([*eastmoney_sections, *finlight_sections])
         source_tokens = [eastmoney_source, finlight_source]
@@ -814,7 +831,7 @@ def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
 
 
 def create_news_result_persist_node():
-    """将最终输出键 news_analysis 持久化到本地 artifacts。"""
+    """将最终输出键 news_analysis 持久化到本地 artifacts，并同步数据库。"""
 
     def news_result_persist_node(
         state: Dict[str, Any],
@@ -848,6 +865,13 @@ def create_news_result_persist_node():
                     "result_path": result_path.as_posix(),
                 },
             )
+            # 每次运行成功落盘后，立即 upsert 到关键表（仅同步摘要字段）。
+            try:
+                from database.data_sync.news_analyst import sync_single_result
+
+                sync_single_result(result_path)
+            except Exception as sync_err:
+                logger.warning("news_analyst 数据库同步失败: %s", sync_err)
             logger.info("news_analysis 已写入本地 artifacts: %s", result_path)
             return {
                 **state,

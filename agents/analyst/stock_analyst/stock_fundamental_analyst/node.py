@@ -1395,7 +1395,7 @@ def create_detect_fundamental_cache_node():
 
 
 def create_fundamental_persist_node():
-    """将基本面分析结果持久化到本地 artifacts。"""
+    """将基本面分析结果持久化到本地 artifacts，并同步数据库主表。"""
 
     def persist_node(
         state: Dict[str, Any],
@@ -1460,6 +1460,13 @@ def create_fundamental_persist_node():
                     "result_path": result_path.as_posix(),
                 },
             )
+            # 每次运行成功落盘后，立即 upsert 到 stock_fundamental 主表。
+            try:
+                from database.data_sync.stock_fundamental_analyst import sync_single_result
+
+                sync_single_result(result_path)
+            except Exception as sync_err:
+                logger.warning("stock_fundamental_analyst 数据库同步失败: %s", sync_err)
             logger.info("fundamental_analyst 结果已持久化: %s", result_path)
             return {
                 **state,

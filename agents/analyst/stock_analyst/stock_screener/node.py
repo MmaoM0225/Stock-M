@@ -994,7 +994,7 @@ def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
 
 
 def create_screener_result_persist_node():
-    """将筛选结果 screener_result 持久化到本地 artifacts。"""
+    """将筛选结果 screener_result 持久化到本地 artifacts，并同步数据库主表。"""
 
     def screener_result_persist_node(state: Dict[str, Any]) -> Dict[str, Any]:
         screener_result = state.get("screener_result")
@@ -1019,6 +1019,13 @@ def create_screener_result_persist_node():
                     "result_path": result_path.as_posix(),
                 },
             )
+            # 每次运行成功落盘后，立即 upsert 到 stock_screener 主表。
+            try:
+                from database.data_sync.stock_screener import sync_single_result
+
+                sync_single_result(result_path)
+            except Exception as sync_err:
+                logger.warning("stock_screener 数据库同步失败: %s", sync_err)
             logger.info("stock_screener 结果已写入本地 artifacts: %s", result_path)
             return {
                 **state,
