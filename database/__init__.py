@@ -3,7 +3,7 @@
 本地开发使用 SQLite，云端部署使用 PostgreSQL
 """
 from database.config import get_db_session, get_engine, get_session, init_db
-from database.models import Base, BreakfastNews, Industry, StockList, ThsIndex
+from database.models import Base, BreakfastNews, CommodityAnalystKey, Industry, StockList, ThsIndex
 
 __all__ = [
     "get_engine",
@@ -15,4 +15,5 @@ __all__ = [
     "Industry",
     "ThsIndex",
     "BreakfastNews",
+    "CommodityAnalystKey",
 ]

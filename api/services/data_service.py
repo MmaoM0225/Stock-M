@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
+from database.models import CommodityAnalystKey
 
 DEFAULT_COMMODITY_META: List[Dict[str, str]] = [
     {"name": "黄金", "code": "Au99.99", "source": "sge"},
@@ -965,8 +966,17 @@ class DataService:
         }
 
     def get_commodity_result(self, trade_date: str) -> Dict[str, Any]:
-        payload = self.get_analyst_result("macro_analyst", "commodity_analyst", trade_date)
-        result = payload.get("result", {})
+        db_row = (
+            self.db.query(CommodityAnalystKey)
+            .filter(CommodityAnalystKey.trade_date == trade_date)
+            .first()
+        )
+        if db_row and db_row.result_path:
+            result_path = self.project_root / str(db_row.result_path)
+            result = self._load_json(result_path)
+        else:
+            payload = self.get_analyst_result("macro_analyst", "commodity_analyst", trade_date)
+            result = payload.get("result", {})
         if not isinstance(result, dict):
             result = {}
 
@@ -1015,6 +1025,17 @@ class DataService:
         return self._map_news_result(result)
 
     def list_analyst_dates(self, group: str, analyst: str) -> List[str]:
+        if group == "macro_analyst" and analyst == "commodity_analyst":
+            rows = (
+                self.db.query(CommodityAnalystKey.trade_date)
+                .distinct()
+                .order_by(CommodityAnalystKey.trade_date.desc())
+                .all()
+            )
+            dates = [str(r[0]) for r in rows if r and r[0]]
+            if dates:
+                return dates
+
         base_dir = self.artifacts_root / "analyst" / group / analyst
         dates: List[str] = []
         if not base_dir.exists():
