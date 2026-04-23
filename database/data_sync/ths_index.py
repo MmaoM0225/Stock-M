@@ -36,6 +36,7 @@ THS_INDEX_TYPE_NAMES = {
 
 # 支持同步的指数类型列表（与 dataflow fetch_ths_index 的 index_type 一致）
 THS_INDEX_TYPES = list(THS_INDEX_TYPE_NAMES)
+DEFAULT_ALLOWED_INDEX_TYPES = {"I", "N"}
 
 
 def _row_to_ths_index(row: pd.Series) -> ThsIndex:
@@ -74,6 +75,45 @@ def sync_ths_index(index_type: Optional[str] = None) -> int:
     if df.empty:
         logger.warning("未获取到同花顺板块指数")
         return 0
+
+    # 全量同步时仅保留 I/N，避免写入非目标类型板块
+    if index_type is None and "type" in df.columns:
+        raw_count = len(df)
+        df["type"] = df["type"].astype(str).str.strip().str.upper()
+        df = df[df["type"].isin(DEFAULT_ALLOWED_INDEX_TYPES)].copy()
+        logger.info(
+            "按 index_type in %s 过滤: %d -> %d",
+            sorted(DEFAULT_ALLOWED_INDEX_TYPES),
+            raw_count,
+            len(df),
+        )
+        if df.empty:
+            logger.warning("按 index_type 过滤后无数据，已终止写库")
+            return 0
+
+    # 仅保留 A 股口径板块，避免混入非 A 市场导致后续成分映射错误
+    raw_count = len(df)
+    if "exchange" not in df.columns:
+        logger.warning("ths_index 数据缺少 exchange 字段，跳过 A 股口径过滤")
+    else:
+        df["exchange"] = df["exchange"].astype(str).str.strip().str.upper()
+        df = df[df["exchange"] == "A"].copy()
+        logger.info("按 exchange='A' 过滤: %d -> %d", raw_count, len(df))
+        if df.empty:
+            logger.warning("按 exchange='A' 过滤后无数据，已终止写库")
+            return 0
+
+    # 过滤无有效成分数量的板块（count<=0 或缺失）
+    if "count" not in df.columns:
+        logger.warning("ths_index 数据缺少 count 字段，跳过 count>0 过滤")
+    else:
+        raw_count = len(df)
+        count_numeric = pd.to_numeric(df["count"], errors="coerce")
+        df = df[count_numeric > 0].copy()
+        logger.info("按 count>0 过滤: %d -> %d", raw_count, len(df))
+        if df.empty:
+            logger.warning("按 count>0 过滤后无数据，已终止写库")
+            return 0
 
     with get_db_session() as session:
         if index_type is None:
