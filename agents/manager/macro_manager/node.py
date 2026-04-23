@@ -68,7 +68,7 @@ def _persist_macro_manager_summary(
     state: Dict[str, Any],
     summary: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """将 macro_manager_summary 持久化到本地 artifacts。"""
+    """将 macro_manager_summary 持久化到本地 artifacts，并同步数据库主表。"""
     trade_date = str(state.get("trade_date") or datetime.now().strftime("%Y%m%d")).replace("-", "")[:8]
     artifact_dir = _MACRO_MANAGER_ARTIFACT_ROOT / trade_date
     result_path = artifact_dir / "result.json"
@@ -86,6 +86,12 @@ def _persist_macro_manager_summary(
             "result_path": result_path.as_posix(),
         },
     )
+    try:
+        from database.data_sync.macro_manager import sync_single_result
+
+        sync_single_result(result_path)
+    except Exception as sync_err:
+        logger.warning("macro_manager 数据库同步失败: %s", sync_err)
     logger.info("macro_manager_summary 已写入本地 artifacts: %s", result_path)
     return {
         **state,

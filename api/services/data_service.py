@@ -5,7 +5,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
-from database.models import CommodityAnalystKey
+from database.models import (
+    CommodityAnalystKey,
+    MacroEconomistKey,
+    MarketSentimentAnalystKey,
+    NewsAnalystKey,
+    SectorCapitalFlowAnalystKey,
+    SectorTrendAnalystKey,
+)
 
 DEFAULT_COMMODITY_META: List[Dict[str, str]] = [
     {"name": "黄金", "code": "Au99.99", "source": "sge"},
@@ -791,8 +798,17 @@ class DataService:
         return self._load_artifact(path)
 
     def get_macro_economist_result(self, trade_date: str) -> Dict[str, Any]:
-        llm_payload = self.get_analyst_result("macro_analyst", "macro_economist", trade_date)
-        llm_output = llm_payload.get("result", {})
+        db_row = (
+            self.db.query(MacroEconomistKey)
+            .filter(MacroEconomistKey.trade_date == trade_date)
+            .first()
+        )
+        if db_row and db_row.result_path:
+            result_path = self.project_root / str(db_row.result_path)
+            llm_output = self._load_json(result_path)
+        else:
+            llm_payload = self.get_analyst_result("macro_analyst", "macro_economist", trade_date)
+            llm_output = llm_payload.get("result", {})
         if not isinstance(llm_output, dict):
             llm_output = {}
 
@@ -816,8 +832,17 @@ class DataService:
         }
 
     def get_market_sentiment_result(self, trade_date: str) -> Dict[str, Any]:
-        payload = self.get_analyst_result("macro_analyst", "market_sentiment_analyst", trade_date)
-        result = payload.get("result", {})
+        db_row = (
+            self.db.query(MarketSentimentAnalystKey)
+            .filter(MarketSentimentAnalystKey.trade_date == trade_date)
+            .first()
+        )
+        if db_row and db_row.result_path:
+            result_path = self.project_root / str(db_row.result_path)
+            result = self._load_json(result_path)
+        else:
+            payload = self.get_analyst_result("macro_analyst", "market_sentiment_analyst", trade_date)
+            result = payload.get("result", {})
         if not isinstance(result, dict):
             result = {}
 
@@ -865,8 +890,17 @@ class DataService:
         }
 
     def get_sector_trend_result(self, trade_date: str) -> Dict[str, Any]:
-        payload = self.get_analyst_result("sector_analyst", "sector_trend_analyst", trade_date)
-        result = payload.get("result", {})
+        db_row = (
+            self.db.query(SectorTrendAnalystKey)
+            .filter(SectorTrendAnalystKey.trade_date == trade_date)
+            .first()
+        )
+        if db_row and db_row.result_path:
+            result_path = self.project_root / str(db_row.result_path)
+            result = self._load_json(result_path)
+        else:
+            payload = self.get_analyst_result("sector_analyst", "sector_trend_analyst", trade_date)
+            result = payload.get("result", {})
         if not isinstance(result, dict):
             result = {}
 
@@ -920,8 +954,17 @@ class DataService:
         return {"ts_code": ts_code, "name": name, "rows": rows}
 
     def get_sector_capital_flow_result(self, trade_date: str) -> Dict[str, Any]:
-        payload = self.get_analyst_result("sector_analyst", "sector_capital_flow_analyst", trade_date)
-        result = payload.get("result", {})
+        db_row = (
+            self.db.query(SectorCapitalFlowAnalystKey)
+            .filter(SectorCapitalFlowAnalystKey.trade_date == trade_date)
+            .first()
+        )
+        if db_row and db_row.result_path:
+            result_path = self.project_root / str(db_row.result_path)
+            result = self._load_json(result_path)
+        else:
+            payload = self.get_analyst_result("sector_analyst", "sector_capital_flow_analyst", trade_date)
+            result = payload.get("result", {})
         if not isinstance(result, dict):
             result = {}
 
@@ -1018,13 +1061,77 @@ class DataService:
         }
 
     def get_news_result(self, trade_date: str) -> Dict[str, Any]:
-        payload = self.get_analyst_result("macro_analyst", "news_analyst", trade_date)
-        result = payload.get("result", {})
+        db_row = (
+            self.db.query(NewsAnalystKey)
+            .filter(NewsAnalystKey.trade_date == trade_date)
+            .first()
+        )
+        if db_row and db_row.result_path:
+            result_path = self.project_root / str(db_row.result_path)
+            result = self._load_json(result_path)
+        else:
+            payload = self.get_analyst_result("macro_analyst", "news_analyst", trade_date)
+            result = payload.get("result", {})
         if not isinstance(result, dict):
             return {}
         return self._map_news_result(result)
 
     def list_analyst_dates(self, group: str, analyst: str) -> List[str]:
+        if group == "sector_analyst" and analyst == "sector_trend_analyst":
+            rows = (
+                self.db.query(SectorTrendAnalystKey.trade_date)
+                .distinct()
+                .order_by(SectorTrendAnalystKey.trade_date.desc())
+                .all()
+            )
+            dates = [str(r[0]) for r in rows if r and r[0]]
+            if dates:
+                return dates
+
+        if group == "sector_analyst" and analyst == "sector_capital_flow_analyst":
+            rows = (
+                self.db.query(SectorCapitalFlowAnalystKey.trade_date)
+                .distinct()
+                .order_by(SectorCapitalFlowAnalystKey.trade_date.desc())
+                .all()
+            )
+            dates = [str(r[0]) for r in rows if r and r[0]]
+            if dates:
+                return dates
+
+        if group == "macro_analyst" and analyst == "news_analyst":
+            rows = (
+                self.db.query(NewsAnalystKey.trade_date)
+                .distinct()
+                .order_by(NewsAnalystKey.trade_date.desc())
+                .all()
+            )
+            dates = [str(r[0]) for r in rows if r and r[0]]
+            if dates:
+                return dates
+
+        if group == "macro_analyst" and analyst == "market_sentiment_analyst":
+            rows = (
+                self.db.query(MarketSentimentAnalystKey.trade_date)
+                .distinct()
+                .order_by(MarketSentimentAnalystKey.trade_date.desc())
+                .all()
+            )
+            dates = [str(r[0]) for r in rows if r and r[0]]
+            if dates:
+                return dates
+
+        if group == "macro_analyst" and analyst == "macro_economist":
+            rows = (
+                self.db.query(MacroEconomistKey.trade_date)
+                .distinct()
+                .order_by(MacroEconomistKey.trade_date.desc())
+                .all()
+            )
+            dates = [str(r[0]) for r in rows if r and r[0]]
+            if dates:
+                return dates
+
         if group == "macro_analyst" and analyst == "commodity_analyst":
             rows = (
                 self.db.query(CommodityAnalystKey.trade_date)

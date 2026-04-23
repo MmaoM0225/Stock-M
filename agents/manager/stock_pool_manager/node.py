@@ -272,7 +272,7 @@ def create_pool_reduce_node():
 
 
 def create_persist_stock_pool_manager_node():
-    """将 stock_pool_manager_result 写入 artifacts。"""
+    """将 stock_pool_manager_result 写入 artifacts，并同步数据库主表。"""
 
     def persist_node(state: Dict[str, Any]) -> Dict[str, Any]:
         payload = state.get("stock_pool_manager_result")
@@ -300,6 +300,12 @@ def create_persist_stock_pool_manager_node():
                     "screener_artifact_path": payload.get("screener_artifact_path"),
                 },
             )
+            try:
+                from database.data_sync.stock_pool_manager import sync_single_result
+
+                sync_single_result(result_path)
+            except Exception as sync_err:
+                logger.warning("stock_pool_manager 数据库同步失败: %s", sync_err)
             logger.info("stock_pool_manager 已写入: %s", result_path)
             return {
                 **state,

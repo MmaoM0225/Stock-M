@@ -431,7 +431,7 @@ def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
 
 
 def create_sector_capital_flow_result_persist_node():
-    """将最终输出键 sector_capital_flow_insight 持久化到本地 artifacts。"""
+    """将最终输出键 sector_capital_flow_insight 持久化到本地 artifacts，并同步数据库。"""
 
     def _persist_node(
         state: Dict[str, Any],
@@ -471,6 +471,13 @@ def create_sector_capital_flow_result_persist_node():
                     "result_path": result_path.as_posix(),
                 },
             )
+            # 每次运行成功落盘后，立即全量 upsert 到数据库。
+            try:
+                from database.data_sync.sector_capital_flow_analyst import sync_single_result
+
+                sync_single_result(result_path)
+            except Exception as sync_err:
+                logger.warning("sector_capital_flow_analyst 数据库同步失败: %s", sync_err)
             logger.info("sector_capital_flow_insight 已写入本地 artifacts: %s", result_path)
             return {
                 **state,
