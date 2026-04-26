@@ -24,15 +24,6 @@ from langchain_core.runnables import RunnableConfig
 from dataflow.kline_data import KLineDataFetcher
 
 from ...utils import extract_json_text
-from .calculation_tools import (
-    calculate_cost_price,
-    calculate_position_change,
-    calculate_realized_pnl,
-    calculate_target_shares,
-    calculate_total_pnl,
-    calculate_unrealized_pnl,
-    normalize_weights,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -334,92 +325,6 @@ def _fetch_close_price(ts_code: str, trade_date: str) -> Optional[float]:
         return None
 
 
-def _default_operations(state: Dict[str, Any], manager_map: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
-    context = state.get("decision_context") or {}
-    first_build = bool((context.get("portfolio_status") or {}).get("is_first_build"))
-    holdings = [r for r in (context.get("portfolio_table") or []) if str(r.get("资产名称")) != "待投资现金"]
-    candidates = list(context.get("stock_candidates") or [])
-    ops: List[Dict[str, Any]] = []
-
-    if first_build:
-        selected = []
-        for c in candidates:
-            tc = str(c.get("ts_code") or "").strip()
-            if not tc:
-                continue
-            selected.append(c)
-            if len(selected) >= 6:
-                break
-        for i, c in enumerate(selected, start=1):
-            ops.append(
-                {
-                    "ts_code": c.get("ts_code"),
-                    "asset_name": c.get("name"),
-                    "operation": "建仓",
-                    "target_weight_pct": round(1.0 / max(1, len(selected)), 4),
-                    "reason": c.get("selection_reason") or "首次建仓，按候选池分散配置",
-                    "priority": i,
-                }
-            )
-        return ops
-
-    for i, h in enumerate(holdings, start=1):
-        tc = str(h.get("ts_code") or "").strip()
-        name = str(h.get("资产名称") or "")
-        if not tc:
-            ops.append(
-                {
-                    "ts_code": None,
-                    "asset_name": name,
-                    "operation": "持有",
-                    "target_weight_pct": _pct_to_float(h.get("仓位")),
-                    "reason": "缺少代码，暂不操作",
-                    "priority": i,
-                }
-            )
-            continue
-        sm = manager_map.get(tc) or {}
-        signal = str(sm.get("action_signal") or "").lower()
-        score = _to_float(sm.get("overall_score"), 50.0)
-        current_w = _pct_to_float(h.get("仓位"))
-
-        # 加仓逻辑：信号为买入且评分较高
-        if signal == "buy" and score >= 65:
-            op = "加仓"
-            target_w = min(current_w + 0.03, 0.20)  # 最大仓位限制为20%
-        # 补仓逻辑：看好的股票下跌时适当补仓（已有持仓且评分仍不错）
-        elif current_w > 0 and score >= 55 and signal not in ["sell", "strong_sell"]:
-            # 评分尚可但略有下降，小幅度补仓以降低成本
-            op = "加仓"
-            target_w = min(current_w + 0.02, 0.20)  # 小幅度补仓，最大20%
-        # 减仓逻辑：信号为卖出或评分较低，但保留最低仓位不轻易清仓
-        elif signal in ["sell", "strong_sell"] or score < 40:
-            op = "减仓"
-            target_w = max(current_w - 0.05, 0.03)  # 最低保留3%仓位，不轻易清仓
-            # 只有评分极低（<30）且信号为强烈卖出时才清仓
-            if score < 30 and signal == "strong_sell":
-                op = "清仓"
-                target_w = 0.0
-        # 评分略低但仍在可接受范围，轻微减仓但不清仓
-        elif score < 50:
-            op = "减仓"
-            target_w = max(current_w - 0.03, 0.03)  # 最低保留3%仓位
-        else:
-            op = "持有"
-            target_w = current_w
-        ops.append(
-            {
-                "ts_code": tc,
-                "asset_name": name,
-                "operation": op,
-                "target_weight_pct": round(target_w, 4),
-                "reason": sm.get("signal_reason") or sm.get("selection_reason") or "沿用 stock_manager 观点",
-                "priority": i,
-            }
-        )
-    return ops
-
-
 def _normalize_operations(data: Dict[str, Any], fallback_ops: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     raw = data.get("operations")
     if not isinstance(raw, list):
@@ -550,7 +455,28 @@ def _apply_operations_to_table(
     old_table: List[Dict[str, Any]],
     operations: List[Dict[str, Any]],
     target_position_range: Optional[Tuple[Optional[float], Optional[float]]] = None,
+    stock_pool_result: Optional[Dict[str, Any]] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], float]:
+    # 构建行业映射表：从stock_pool_result中获取每只股票的industry
+    industry_map: Dict[str, str] = {}
+    if stock_pool_result:
+        # 从per_stock中获取行业信息
+        per_stock = stock_pool_result.get("per_stock") or []
+        for row in per_stock:
+            if isinstance(row, dict):
+                ts_code = str(row.get("ts_code") or "").strip()
+                industry = row.get("industry") or ""
+                if ts_code and industry:
+                    industry_map[ts_code] = industry
+        # 如果per_stock中没有，从candidate_stocks中补充
+        if not industry_map:
+            candidates = stock_pool_result.get("candidate_stocks") or []
+            for row in candidates:
+                if isinstance(row, dict):
+                    ts_code = str(row.get("ts_code") or "").strip()
+                    industry = row.get("industry") or ""
+                    if ts_code and industry:
+                        industry_map[ts_code] = industry
     old_map: Dict[str, Dict[str, Any]] = {}
     previous_cash = 0.0
     for row in old_table:
@@ -601,6 +527,16 @@ def _apply_operations_to_table(
         row_weight = max(0.0, row_weight)
         if operation == "清仓":
             row_weight = 0.0
+        # 持有操作：如果没有指定目标仓位，保持原仓位（避免误清仓）
+        if operation == "持有" and row_weight == 0.0:
+            # 查找该资产的原仓位
+            asset_key = str(op.get("ts_code") or op.get("asset_name") or "").strip()
+            for old_row in old_table:
+                old_key = str(old_row.get("ts_code") or old_row.get("资产名称") or "").strip()
+                if old_key and old_key == asset_key:
+                    old_weight_pct = str(old_row.get("仓位", "0.00%")).replace("%", "")
+                    row_weight = max(0.0, _to_float(old_weight_pct, 0.0) / 100.0)
+                    break
         # 程序级硬约束：单只股票仓位不超过 20%
         row_weight = min(row_weight, per_stock_max_weight)
         normalized_weights[idx] = row_weight
@@ -644,6 +580,81 @@ def _apply_operations_to_table(
                     if normalized_weights[i] < per_stock_max_weight - 1e-9:
                         new_expandable.append(i)
                 expandable = new_expandable
+
+        # 程序级硬约束：单板块仓位上限按“已投资金额”的30%计算（不是总资产）。
+        # 例如总仓位 target_total=60%，则单板块上限=0.6*30%=18%（占总资产口径）。
+        sector_cap_on_invested = 0.30
+        sector_cap_on_total = target_total * sector_cap_on_invested
+
+        def _get_sector_for_weight_idx(weight_idx: int) -> str:
+            one_op = operations[weight_idx] if 0 <= weight_idx < len(operations) else {}
+            ts = str(one_op.get("ts_code") or "").strip()
+            name = str(one_op.get("asset_name") or "").strip()
+            if ts and industry_map.get(ts):
+                return str(industry_map.get(ts))
+            old_key = ts or name
+            old_row = old_map.get(old_key, {})
+            sector = str(old_row.get("行业/板块") or "").strip()
+            return sector or "未知"
+
+        sector_weights: Dict[str, float] = {}
+        sector_to_idx: Dict[str, List[int]] = {}
+        for idx in active_idx:
+            w = normalized_weights.get(idx, 0.0)
+            if w <= 0:
+                continue
+            sec = _get_sector_for_weight_idx(idx)
+            sector_weights[sec] = sector_weights.get(sec, 0.0) + w
+            sector_to_idx.setdefault(sec, []).append(idx)
+
+        overweight_sectors = [s for s, w in sector_weights.items() if w > sector_cap_on_total + 1e-9]
+        if overweight_sectors:
+            for sec in overweight_sectors:
+                sec_total = sector_weights.get(sec, 0.0)
+                if sec_total <= sector_cap_on_total + 1e-9:
+                    continue
+                cut_ratio = sector_cap_on_total / sec_total if sec_total > 0 else 1.0
+                for idx in sector_to_idx.get(sec, []):
+                    normalized_weights[idx] *= cut_ratio
+
+            # 将超限削减出来的权重，优先分配给未超限板块的股票（仍受单票20%约束）
+            current_total = sum(normalized_weights[i] for i in active_idx)
+            deficit = max(0.0, target_total - current_total)
+            if deficit > 1e-6:
+                for _ in range(3):
+                    if deficit <= 1e-6:
+                        break
+                    sector_weights = {}
+                    for idx in active_idx:
+                        w = normalized_weights.get(idx, 0.0)
+                        if w <= 0:
+                            continue
+                        sec = _get_sector_for_weight_idx(idx)
+                        sector_weights[sec] = sector_weights.get(sec, 0.0) + w
+                    expandable = []
+                    for idx in active_idx:
+                        sec = _get_sector_for_weight_idx(idx)
+                        if sector_weights.get(sec, 0.0) >= sector_cap_on_total - 1e-9:
+                            continue
+                        if normalized_weights[idx] < per_stock_max_weight - 1e-9:
+                            expandable.append(idx)
+                    if not expandable:
+                        break
+                    per_add = deficit / len(expandable)
+                    progressed = 0.0
+                    for idx in expandable:
+                        sec = _get_sector_for_weight_idx(idx)
+                        sector_room = max(0.0, sector_cap_on_total - sector_weights.get(sec, 0.0))
+                        stock_room = max(0.0, per_stock_max_weight - normalized_weights[idx])
+                        add = min(per_add, sector_room, stock_room, deficit)
+                        if add <= 0:
+                            continue
+                        normalized_weights[idx] += add
+                        sector_weights[sec] = sector_weights.get(sec, 0.0) + add
+                        deficit -= add
+                        progressed += add
+                    if progressed <= 1e-9:
+                        break
 
     for op_idx, op in sorted(enumerate(operations), key=lambda x: int(x[1].get("priority") or 9999)):
         ts_code = str(op.get("ts_code") or "").strip()
@@ -725,20 +736,38 @@ def _apply_operations_to_table(
                     # 处理减仓：如果新计算股数小于原持仓，则为减仓
                     if operation == "减仓" and old_shares > 0 and tradable_shares < old_shares:
                         # 判断是否为极小幅减仓：如果剩余股数<=1手或减仓幅度<5%，转为清仓
-                        min_hold_lots = 2  # 最少保留2手（200股），否则直接清仓
+                        min_hold_lots = 1  # 最少保留1手（100股），否则直接清仓
                         reduced_lots = (old_shares - tradable_shares) / lot_size
                         old_lots = old_shares / lot_size
-                        # 如果减仓后剩余不足2手，或减仓仅1手及以下，或减仓比例<5%，直接清仓
-                        if tradable_shares < min_hold_lots * lot_size or reduced_lots <= 1 or (reduced_lots / old_lots < 0.05):
+                        # 如果减仓后剩余不足1手，直接清仓；
+                        # 如果减仓比例<5%，则视为微调噪声，不执行调整（保持原仓位）。
+                        # 注意：减1手允许执行，不再触发自动清仓。
+                        if tradable_shares < min_hold_lots * lot_size:
                             shares = 0
                             amount = 0.0
                             actual_w = 0.0
                             operation = "清仓"  # 转为清仓操作
+                            cost_price = None
+                        elif (reduced_lots / old_lots < 0.05):
+                            shares = old_shares
+                            amount = round(shares * close_price, 2)
+                            actual_w = (amount / total_capital) if total_capital > 0 else 0.0
+                            operation = "持有"
+                            cost_price = old_cost if old_cost > 0 else close_price
+                            auto_rebalance_reason = (
+                                f"{auto_rebalance_reason}；减仓幅度小于5%，系统判定为微调噪声并保持原仓位不调整"
+                                if auto_rebalance_reason
+                                else "减仓幅度小于5%，系统判定为微调噪声并保持原仓位不调整"
+                            )
                         else:
                             shares = tradable_shares
                             amount = round(shares * close_price, 2)
                             actual_w = (amount / total_capital) if total_capital > 0 else 0.0
-                        cost_price = old_cost if old_cost > 0 else close_price  # 减仓后成本价不变
+                            # 减仓：按剩余仓位重新计算加权持仓成本（与加仓逻辑一致）
+                            reduce_shares = old_shares - shares
+                            base_cost = old_cost if old_cost > 0 else close_price
+                            # 加权平均：原成本按新旧股数比例重新分配
+                            cost_price = ((old_shares * base_cost) - (reduce_shares * close_price)) / max(shares, 1)
                     elif operation == "加仓" and old_shares > 0 and tradable_shares > old_shares:
                         # 加仓：按旧仓+新增仓做加权成本
                         shares = tradable_shares
@@ -774,16 +803,23 @@ def _apply_operations_to_table(
             cost_price = None
 
         # 收益计算（持仓维度，按“当日收盘价 vs 成本价”估值）
-        if isinstance(shares, int) and shares > 0 and close_price is not None and cost_price and cost_price > 0:
+        if isinstance(shares, int) and shares > 0 and close_price is not None and cost_price is not None:
             total_pnl = round((close_price - cost_price) * shares, 2)
-            total_ret = (close_price / cost_price - 1.0)
+            # 成本为正时：使用标准收益率公式
+            # 成本为负时：表示已实现盈利覆盖成本，收益率使用特殊计算
+            if cost_price > 0:
+                total_ret = (close_price / cost_price - 1.0)
+            else:
+                # 负成本时，市值本身就是盈利，收益率 = (收盘价 - 成本) / |成本|
+                total_ret = (close_price - cost_price) / abs(cost_price)
         else:
             total_pnl = 0.0
             total_ret = 0.0
 
         invested += amount
 
-        industry = old.get("行业/板块") or "-"
+        # 优先从stock_pool_result获取行业信息，其次使用旧持仓的行业，最后兜底为"-"
+        industry = industry_map.get(ts_code, "") or old.get("行业/板块") or "-"
         asset_type = old.get("资产类型") or ("个股" if ts_code else "其他")
         notes = old.get("核心特征/备注") or "-"
         if amount > 0:
@@ -801,7 +837,7 @@ def _apply_operations_to_table(
                     "资产类型": asset_type,
                     "核心特征/备注": notes,
                     "持仓股数": shares,
-                    "成本价": round(cost_price, 4) if isinstance(cost_price, (int, float)) and cost_price > 0 else None,
+                    "成本价": round(cost_price, 4) if isinstance(cost_price, (int, float)) and cost_price != 0 else None,
                     "总收益 (%)": _fmt_pct(total_ret),
                     "操作": operation,
                     "收盘价": close_price,
@@ -812,6 +848,7 @@ def _apply_operations_to_table(
             {
                 "资产名称": name or old.get("资产名称") or ts_code,
                 "ts_code": ts_code or old.get("ts_code"),
+                "行业/板块": industry,
                 "操作": operation,
                 "原仓位": _fmt_pct(old_w),
                 "新仓位": _fmt_pct(actual_w),
@@ -820,10 +857,25 @@ def _apply_operations_to_table(
                 "目标金额(元)": target_budget,
                 "实际成交金额(元)": amount,
                 "成交股数": shares,
-                "成本价": round(cost_price, 4) if isinstance(cost_price, (int, float)) and cost_price > 0 else None,
+                "成本价": round(cost_price, 4) if isinstance(cost_price, (int, float)) and cost_price != 0 else None,
                 "操作原因": (op.get("reason") or "") + (f"；{auto_rebalance_reason}" if auto_rebalance_reason else ""),
             }
         )
+
+    # 按仓位大小对股票进行排序（降序），并重新分配排名
+    def _parse_position_weight(row: Dict[str, Any]) -> float:
+        """解析仓位百分比字符串为浮点数"""
+        weight_str = str(row.get("仓位", "0.00%")).replace("%", "").strip()
+        try:
+            return float(weight_str) / 100.0
+        except (ValueError, TypeError):
+            return 0.0
+
+    result_rows.sort(key=_parse_position_weight, reverse=True)
+
+    # 重新分配排名
+    for idx, row in enumerate(result_rows, start=1):
+        row["排名"] = idx
 
     cash_amt = round(max(total_capital - invested, 0.0), 2)
     result_rows.append(
@@ -891,16 +943,14 @@ def create_llm_make_decision_node(llm: Any, stock_manager_graph: Any = None):
         else:
             system_msg = """你是组合决策官。目标：生成可执行的调仓动作。
 约束：
-1) 操作仅允许：建仓/加仓/减仓/清仓/持有；注意：若减仓后剩余持仓不足2手（200股）或减仓幅度小于5%，系统将自动转为清仓处理；
+1) 操作仅允许：建仓/加仓/减仓/清仓/持有；注意：若减仓后剩余持仓不足1手（100股）或减仓幅度小于5%，系统将自动转为清仓处理；
 2) 若是首次建仓（is_first_build=true），优先给建仓；
 3) 每条操作必须给出原因；
 4) 输出严格JSON；
 5) 必须参考 macro_hint.target_position 给出的仓位区间建议（如"20%-40%"），将总仓位控制在建议区间内；
 6) target_weight_pct 为单个资产的目标仓位比例（0-1之间的小数，如0.12表示12%）；
-7) 看好的股票下跌时可补仓：对于基本面良好、只是短期下跌的股票，可适当加仓以降低成本；
-8) 严格避免介入技术面长期下跌且无明显反转信号的股票：即使基本面优秀，若股票处于长期下跌趋势（如均线空头排列、创近期新低）且缺乏明确反转信号（如放量阳线、底背离、形态突破等），禁止建仓或加仓，仅可持有或减仓；
-9) 单只股票最大仓位不超过20%（0.20），首次建仓建议5%-15%；
-10) 保持仓位多样性：避免过度集中于少数股票，建议持有3-8只不同股票分散风险，避免单一板块过度集中（单板块不超过30%总仓位）。"""
+7) 单只股票最大仓位不超过20%（0.20），首次建仓建议5%-15%；
+8) 保持仓位多样性：避免过度集中于少数股票，建议持有3-8只不同股票分散风险，避免单一板块过度集中（单板块不超过已投资金额的30%）。"""
             human_msg = """输入：
 {payload}
 
@@ -916,10 +966,8 @@ def create_llm_make_decision_node(llm: Any, stock_manager_graph: Any = None):
 - 请严格遵循 macro_hint.target_position 的仓位区间建议
 - 所有资产的 target_weight_pct 总和应在建议区间内
 - 首次建仓时分散配置，单只仓位建议 5%至20%（不超过20%上限）
-- 调仓时优先保留基本面优秀的持仓，减持高风险资产；若减仓幅度极小（剩余<2手或减仓<5%），建议直接清仓而非小额减仓
-- 补仓策略：基本面良好的股票短期下跌时，可小幅度加仓（如2%-5%）降低成本；但技术面长期下跌且无明显反转信号（如均线空头排列、创近期新低、缺乏放量阳线/底背离/形态突破等）的股票，即使基本面优秀也禁止介入
 - 严格遵守单只股票最大仓位20%的限制
-- 仓位多样性：建议持有5-10只股票，避免单只股票或单一板块过度集中（单板块不超过40%），通过分散投资降低组合风险"""
+- 仓位多样性：建议持有5-10只股票，避免单只股票或单一板块过度集中（单板块不超过已投资金额的30%），通过分散投资降低组合风险"""
             prompt = ChatPromptTemplate.from_messages([("system", system_msg), ("human", human_msg)])
             chain = prompt | llm
 
@@ -987,6 +1035,7 @@ def create_llm_make_decision_node(llm: Any, stock_manager_graph: Any = None):
             old_table=context.get("portfolio_table") or [],
             operations=operations,
             target_position_range=target_position_range,
+            stock_pool_result=state.get("stock_pool_manager_result"),
         )
         summary = _build_programmatic_decision_summary(
             old_table=context.get("portfolio_table") or [],

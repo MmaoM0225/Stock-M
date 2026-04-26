@@ -27,7 +27,7 @@
 运行方式:
     python live_trading.py
     python live_trading.py --single-date 20250102
-    python live_trading.py --start-date 20250101 --end-date 20251231 --interval 7
+    python live_trading.py --start-date 20240108 --end-date 20260424 --interval 7
     python live_trading.py --dry-run  # 仅预览交易日历，不实际运行
 """
 
@@ -78,9 +78,9 @@ SECTOR_MANAGER_ROOT = Path("data/artifacts/manager/sector_manager")
 STOCK_POOL_MANAGER_ROOT = Path("data/artifacts/manager/stock_pool_manager")
 MACRO_MANAGER_ROOT = Path("data/artifacts/manager/macro_manager")
 STOCK_SCREENER_ROOT = Path("data/artifacts/analyst/stock_analyst/stock_screener")
-PORTFOLIO_DECISION_ROOT = Path("data/artifacts/decision/overall_ver1.4/portfolio")
+PORTFOLIO_DECISION_ROOT = Path("data/artifacts/decision/overall_ver1.8/portfolio")
 
-DEFAULT_INITIAL_CAPITAL = 500000.0
+DEFAULT_INITIAL_CAPITAL = 1000000.0
 
 
 def load_portfolio_book(trade_date: str) -> Optional[List[Dict[str, Any]]]:
@@ -179,7 +179,7 @@ def run_stock_screener(
         "trade_date": trade_date,
         "min_market_cap": 80e8,  # 最小市值80亿
         "exclude_st": True,       # 排除ST股票
-        "max_stocks": 12,         # 最多返回12只
+        "max_stocks": 18,         # 最多返回18只
         # "max_price": 800,       # 股价上限预留字段，暂不使用
     }
     
@@ -439,7 +439,7 @@ def main():
     trading_days = [str(d) for d in all_trading_days]
     
     if not trading_days:
-        logger.error(f"指定日期范围内无交易日: {start_date} - {end_date}")
+        logger.error(f"指定日期范围内无交易日: {args.start_date} - {args.end_date}")
         sys.exit(1)
     
     logger.info(f"\n{'#'*60}")

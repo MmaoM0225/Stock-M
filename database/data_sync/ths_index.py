@@ -103,18 +103,6 @@ def sync_ths_index(index_type: Optional[str] = None) -> int:
             logger.warning("按 exchange='A' 过滤后无数据，已终止写库")
             return 0
 
-    # 过滤无有效成分数量的板块（count<=0 或缺失）
-    if "count" not in df.columns:
-        logger.warning("ths_index 数据缺少 count 字段，跳过 count>0 过滤")
-    else:
-        raw_count = len(df)
-        count_numeric = pd.to_numeric(df["count"], errors="coerce")
-        df = df[count_numeric > 0].copy()
-        logger.info("按 count>0 过滤: %d -> %d", raw_count, len(df))
-        if df.empty:
-            logger.warning("按 count>0 过滤后无数据，已终止写库")
-            return 0
-
     with get_db_session() as session:
         if index_type is None:
             deleted = session.query(ThsIndex).delete()

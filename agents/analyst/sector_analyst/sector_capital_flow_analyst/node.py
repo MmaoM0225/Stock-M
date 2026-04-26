@@ -348,6 +348,27 @@ _SECTOR_FLOW_INSIGHT_DEFAULT = {
 }
 
 
+def _split_sector_names(text: Any) -> List[str]:
+    normalized = str(text or "").replace("／", "/").strip()
+    if not normalized:
+        return []
+    return [x.strip() for x in normalized.split("/") if x and x.strip()]
+
+
+def _normalize_sector_name_list(items: Any) -> List[str]:
+    out: List[str] = []
+    seen = set()
+    if not isinstance(items, list):
+        return out
+    for item in items:
+        for name in _split_sector_names(item):
+            if name in seen:
+                continue
+            seen.add(name)
+            out.append(name)
+    return out
+
+
 _MAP_THS_FIELDS = """【同花顺 ths_concept 每条字段】
 - ts_code、name：代码、名称；days：窗口内交易日天数
 - net_amount_sum：净流入金额(万元)，正=流入负=流出；flow_strength：净流入占买卖比例
@@ -397,6 +418,7 @@ def create_sector_capital_flow_insight_node(llm):
   "hot_sectors": ["热点板块/行业名称列表"],
   "risk_sectors": ["风险/弱势板块/行业名称列表"]
 }}}}
+板块名称必须逐条独立输出，禁止把相似板块合并为单条字符串（例如禁止“自然景点/旅游及酒店”，应拆成“自然景点”“旅游及酒店”）。
 market_bias 表示整体资金面偏多/中性/偏空。无明显方向时 market_bias 填 neutral。"""
 
         human_msg = """【同花顺概念/板块 数据】
@@ -416,6 +438,8 @@ market_bias 表示整体资金面偏多/中性/偏空。无明显方向时 marke
         data = extract_json_text(raw)
         for k, v in _SECTOR_FLOW_INSIGHT_DEFAULT.items():
             data.setdefault(k, v)
+        data["hot_sectors"] = _normalize_sector_name_list(data.get("hot_sectors"))
+        data["risk_sectors"] = _normalize_sector_name_list(data.get("risk_sectors"))
         return {"sector_capital_flow_insight": data}
 
     return _insight_node

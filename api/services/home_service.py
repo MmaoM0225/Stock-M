@@ -5,6 +5,8 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
+DEFAULT_PORTFOLIO_VERSION = "daily_ver1.4"
+
 
 class HomeService:
     def __init__(self, db: Session, project_root: Optional[Path] = None):
@@ -58,7 +60,9 @@ class HomeService:
                 "to": "/data/analyst/macro/commodity",
             },
         ]
-        self._overall_portfolio_dir = self.artifacts_root / "decision" / "overall_ver1.4" / "portfolio"
+        self._overall_portfolio_dir = (
+            self.artifacts_root / "decision" / DEFAULT_PORTFOLIO_VERSION / "portfolio"
+        )
 
     def get_agent_outputs_preview(self, page: int, page_size: int) -> Dict[str, Any]:
         items = [item for item in (self._build_agent_item(src) for src in self._agent_sources) if item]
@@ -70,7 +74,9 @@ class HomeService:
     def get_portfolio_summary(self) -> Dict[str, Any]:
         dates = self._list_overall_portfolio_dates()
         if not dates:
-            raise FileNotFoundError("no portfolio result found in overall_ver1.4")
+            raise FileNotFoundError(
+                f"no portfolio result found in {DEFAULT_PORTFOLIO_VERSION}"
+            )
 
         latest_date = dates[-1]
         latest_payload = self._load_json(self._overall_portfolio_dir / latest_date / "result.json")

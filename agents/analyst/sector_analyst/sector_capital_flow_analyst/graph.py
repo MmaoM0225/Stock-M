@@ -25,6 +25,11 @@ class SectorCapitalFlowState(TypedDict, total=False):
     sector_capital_flow_insight: Dict
 
 
+def _route_after_fetch(state: SectorCapitalFlowState) -> str:
+    records = state.get("sector_moneyflow_data") or []
+    return "sector_capital_flow_analysis" if records else END
+
+
 def create_sector_capital_flow_fetch_only_graph() -> Any:
     """
     仅 fetch/analysis 的图（无 LLM 洞察）。
@@ -33,7 +38,7 @@ def create_sector_capital_flow_fetch_only_graph() -> Any:
     builder.add_node("sector_capital_flow_fetch", create_sector_capital_flow_fetch_node())
     builder.add_node("sector_capital_flow_analysis", create_sector_capital_flow_analysis_node())
     builder.add_edge(START, "sector_capital_flow_fetch")
-    builder.add_edge("sector_capital_flow_fetch", "sector_capital_flow_analysis")
+    builder.add_conditional_edges("sector_capital_flow_fetch", _route_after_fetch)
     builder.add_edge("sector_capital_flow_analysis", END)
     return builder.compile()
 
@@ -60,7 +65,7 @@ def create_sector_capital_flow_analyst_graph(llm=None) -> Any:
     builder.add_node("sector_capital_flow_result_persist", create_sector_capital_flow_result_persist_node())
 
     builder.add_edge(START, "sector_capital_flow_fetch")
-    builder.add_edge("sector_capital_flow_fetch", "sector_capital_flow_analysis")
+    builder.add_conditional_edges("sector_capital_flow_fetch", _route_after_fetch)
     builder.add_edge("sector_capital_flow_analysis", "sector_capital_flow_insight")
     builder.add_edge("sector_capital_flow_insight", "sector_capital_flow_result_persist")
     builder.add_edge("sector_capital_flow_result_persist", END)

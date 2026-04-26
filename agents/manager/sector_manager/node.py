@@ -174,19 +174,33 @@ def create_detect_available_analysts_node(
     return detect_available_analysts_node
 
 
-def _ordered_unique_strings(items: Iterable[Any], max_items: Optional[int] = None) -> List[str]:
+def _split_sector_names(text: str) -> List[str]:
+    """将可能被合并的板块名拆分为独立项（如 A/B -> A, B）。"""
+    normalized = str(text).replace("／", "/").strip()
+    if not normalized:
+        return []
+    parts = [part.strip() for part in normalized.split("/") if part and part.strip()]
+    return parts or [normalized]
+
+
+def _ordered_unique_strings(
+    items: Iterable[Any],
+    max_items: Optional[int] = None,
+    split_merged_names: bool = False,
+) -> List[str]:
     out: List[str] = []
     seen = set()
     for item in items:
         if item is None:
             continue
-        text = str(item).strip()
-        if not text or text in seen:
-            continue
-        seen.add(text)
-        out.append(text)
-        if max_items is not None and len(out) >= max_items:
-            break
+        candidates = _split_sector_names(str(item)) if split_merged_names else [str(item).strip()]
+        for text in candidates:
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            out.append(text)
+            if max_items is not None and len(out) >= max_items:
+                return out
     return out
 
 
@@ -220,10 +234,12 @@ def _build_rule_based_sector_summary(state: Dict[str, Any]) -> Dict[str, Any]:
             *(flow.get("hot_sectors") or []),
         ],
         max_items=8,
+        split_merged_names=True,
     )
     watchlist_sectors = _ordered_unique_strings(
         trend.get("reversal_opportunities") or [],
         max_items=6,
+        split_merged_names=True,
     )
     risk_sectors = _ordered_unique_strings(
         [
@@ -232,6 +248,7 @@ def _build_rule_based_sector_summary(state: Dict[str, Any]) -> Dict[str, Any]:
             *(flow.get("risk_sectors") or []),
         ],
         max_items=8,
+        split_merged_names=True,
     )
     core_signals = _ordered_unique_strings(
         [
@@ -375,6 +392,7 @@ def create_sector_summary_node(llm=None):
 - favored_sectors 优先保留同时得到趋势与资金验证的方向。
 - watchlist_sectors 主要来自修复候选、轮动候选。
 - risk_sectors 主要来自高位风险与资金弱势方向。
+- 板块名称必须逐条独立输出，禁止将相似板块合并为一个字符串（例如禁止“自然景点/旅游及酒店”，应拆成“自然景点”“旅游及酒店”）。
 - 结论必须针对当日输入，不能输出空泛模板话术。
 - 所有字段必须存在；无法判断时用 unknown、[] 或 0.0。
 - 只输出 JSON，不要额外解释。"""
@@ -407,6 +425,22 @@ def create_sector_summary_node(llm=None):
                 **_SECTOR_MANAGER_SUMMARY_DEFAULT,
                 **data,
             }
+            # 兜底标准化：若模型把多个板块合并为 A/B，这里强制拆分为独立名称。
+            summary["favored_sectors"] = _ordered_unique_strings(
+                summary.get("favored_sectors") or [],
+                max_items=8,
+                split_merged_names=True,
+            )
+            summary["watchlist_sectors"] = _ordered_unique_strings(
+                summary.get("watchlist_sectors") or [],
+                max_items=6,
+                split_merged_names=True,
+            )
+            summary["risk_sectors"] = _ordered_unique_strings(
+                summary.get("risk_sectors") or [],
+                max_items=8,
+                split_merged_names=True,
+            )
             try:
                 return _persist_sector_manager_summary(state, summary)
             except Exception as e:

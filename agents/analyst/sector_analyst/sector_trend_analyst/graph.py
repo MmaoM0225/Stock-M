@@ -25,12 +25,17 @@ class SectorTrendState(TypedDict, total=False):
     sector_trend_insight: Dict
 
 
+def _route_after_fetch(state: SectorTrendState) -> str:
+    records = state.get("ths_daily_data") or []
+    return "sector_trend_analysis" if records else END
+
+
 def create_sector_trend_fetch_only_graph() -> Any:
     builder = StateGraph(SectorTrendState)
     builder.add_node("sector_trend_fetch", create_sector_trend_fetch_node())
     builder.add_node("sector_trend_analysis", create_sector_trend_analysis_node())
     builder.add_edge(START, "sector_trend_fetch")
-    builder.add_edge("sector_trend_fetch", "sector_trend_analysis")
+    builder.add_conditional_edges("sector_trend_fetch", _route_after_fetch)
     builder.add_edge("sector_trend_analysis", END)
     return builder.compile()
 
@@ -46,7 +51,7 @@ def create_sector_trend_analyst_graph(llm=None) -> Any:
     builder.add_node("sector_trend_result_persist", create_sector_trend_result_persist_node())
 
     builder.add_edge(START, "sector_trend_fetch")
-    builder.add_edge("sector_trend_fetch", "sector_trend_analysis")
+    builder.add_conditional_edges("sector_trend_fetch", _route_after_fetch)
     builder.add_edge("sector_trend_analysis", "sector_trend_insight")
     builder.add_edge("sector_trend_insight", "sector_trend_result_persist")
     builder.add_edge("sector_trend_result_persist", END)
