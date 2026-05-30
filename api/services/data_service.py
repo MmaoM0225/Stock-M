@@ -34,7 +34,7 @@ DEFAULT_COMMODITY_META: List[Dict[str, str]] = [
     {"name": "沪铝连续", "code": "ALL.SHF", "source": "fut"},
     {"name": "棉花连续", "code": "CFL.ZCE", "source": "fut"},
 ]
-DEFAULT_PORTFOLIO_VERSION = "daily_ver1.4"
+DEFAULT_PORTFOLIO_VERSION = "daily_full_position_ver1"
 
 class DataService:
     def __init__(self, db: Session, project_root: Optional[Path] = None):

@@ -122,7 +122,8 @@ def _to_int(value: Any, default: int = 0) -> int:
 def _canonical_holding_row(row: Dict[str, Any]) -> Dict[str, Any]:
     shares = _to_int(row.get("持仓股数", row.get("shares")), 0)
     raw_cost = _to_float(row.get("成本价", row.get("cost_price")), 0.0)
-    if raw_cost <= 0 and shares > 0:
+    # 仅在成本缺失（=0）时回填，保留负成本（可能代表历史已实现盈利覆盖成本）
+    if raw_cost == 0 and shares > 0:
         raw_cost = _to_float(row.get("市值 (元)", row.get("market_value", 0.0)), 0.0) / shares
     return {
         "排名": row.get("排名", row.get("rank", "-")),
@@ -137,7 +138,7 @@ def _canonical_holding_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "资产类型": row.get("资产类型", row.get("asset_type", "")),
         "核心特征/备注": row.get("核心特征/备注", row.get("notes", "")),
         "持仓股数": row.get("持仓股数", row.get("shares")),
-        "成本价": round(raw_cost, 4) if raw_cost > 0 else None,
+        "成本价": round(raw_cost, 4) if raw_cost != 0 else None,
         "操作": row.get("操作", "-"),
         # 向后兼容：优先读取新字段“收盘价”，旧数据中可能仍是“开盘价”
         "收盘价": row.get("收盘价", row.get("开盘价")),
@@ -212,7 +213,9 @@ def create_load_upstream_artifacts_node():
             state,
             state_key="stock_pool_manager_result",
             path_key="stock_pool_manager_result_path",
-            default_path=_STOCK_POOL_MANAGER_ARTIFACT_ROOT / trade_date / "result.json",
+            default_path=_get_artifact_root(
+                state, "stock_pool_manager_root", _STOCK_POOL_MANAGER_ARTIFACT_ROOT
+            ) / trade_date / "result.json",
         )
         macro_summary, macro_path, macro_err = _load_upstream_payload(
             state,
@@ -666,9 +669,9 @@ def _apply_operations_to_table(
         old_w = _pct_to_float(old.get("仓位"))
         old_shares = _to_int(old.get("持仓股数"), 0)
         old_cost = _to_float(old.get("成本价"), 0.0)
-        if old_cost <= 0 and old_shares > 0:
+        if old_cost == 0 and old_shares > 0:
             old_cost = _to_float(old.get("市值 (元)"), 0.0) / max(old_shares, 1)
-        if old_cost <= 0:
+        if old_cost == 0:
             old_cost = _to_float(old.get("收盘价", old.get("开盘价")), 0.0)
         new_w = normalized_weights.get(op_idx, _to_float(op.get("target_weight_pct"), old_w))
         operation = str(op.get("operation") or "持有")
@@ -703,7 +706,7 @@ def _apply_operations_to_table(
                 shares = old_shares if old_shares > 0 else 0
                 amount = round(shares * close_price, 2) if shares > 0 else 0.0
                 actual_w = (amount / total_capital) if total_capital > 0 else 0.0
-                cost_price = old_cost if old_cost > 0 else close_price
+                cost_price = old_cost if old_cost != 0 else close_price
             else:
                 # 建仓/加仓/减仓：根据目标金额计算股数
                 # 若当前仅 1 手持仓且给出“减仓”，按业务规则直接清仓
@@ -712,7 +715,7 @@ def _apply_operations_to_table(
                     amount = 0.0
                     actual_w = 0.0
                     operation = "清仓"
-                    cost_price = old_cost if old_cost > 0 else close_price
+                    cost_price = old_cost if old_cost != 0 else close_price
                     auto_rebalance_reason = (
                         f"{auto_rebalance_reason}；当前仅1手持仓，减仓自动转为清仓"
                         if auto_rebalance_reason
@@ -721,13 +724,10 @@ def _apply_operations_to_table(
                     # 该分支已完成处理，跳过后续按目标金额计算
                     tradable_shares = 0
                 else:
-                    # 计算目标金额能买多少手（向上取整，确保买够目标仓位）
+                    # 计算目标金额能买多少手（向下取整，确保不超预算）
                     target_lots = target_budget / (close_price * lot_size)
-                    # 向上取整到整手数（ceiling），确保买够
-                    lots = int(target_lots) if target_lots == int(target_lots) else int(target_lots) + 1
-                    # 建仓/加仓时：确保至少1手（如果目标金额够买至少1手）
-                    if lots <= 0 and target_budget >= close_price * lot_size:
-                        lots = 1
+                    # 向下取整到整手数（floor），严格控制成交金额不超过目标金额
+                    lots = int(target_lots) if target_lots > 0 else 0
                     # 减仓时：如果目标仓位为0或无法计算，清仓
                     if operation == "减仓" and lots <= 0:
                         lots = 0
@@ -753,7 +753,7 @@ def _apply_operations_to_table(
                             amount = round(shares * close_price, 2)
                             actual_w = (amount / total_capital) if total_capital > 0 else 0.0
                             operation = "持有"
-                            cost_price = old_cost if old_cost > 0 else close_price
+                            cost_price = old_cost if old_cost != 0 else close_price
                             auto_rebalance_reason = (
                                 f"{auto_rebalance_reason}；减仓幅度小于5%，系统判定为微调噪声并保持原仓位不调整"
                                 if auto_rebalance_reason
@@ -763,18 +763,15 @@ def _apply_operations_to_table(
                             shares = tradable_shares
                             amount = round(shares * close_price, 2)
                             actual_w = (amount / total_capital) if total_capital > 0 else 0.0
-                            # 减仓：按剩余仓位重新计算加权持仓成本（与加仓逻辑一致）
-                            reduce_shares = old_shares - shares
-                            base_cost = old_cost if old_cost > 0 else close_price
-                            # 加权平均：原成本按新旧股数比例重新分配
-                            cost_price = ((old_shares * base_cost) - (reduce_shares * close_price)) / max(shares, 1)
+                            # 减仓：成本按移动加权规则保持不变（仅降低持仓数量）
+                            cost_price = old_cost if old_cost != 0 else close_price
                     elif operation == "加仓" and old_shares > 0 and tradable_shares > old_shares:
                         # 加仓：按旧仓+新增仓做加权成本
                         shares = tradable_shares
                         amount = round(shares * close_price, 2)
                         actual_w = (amount / total_capital) if total_capital > 0 else 0.0
                         add_shares = shares - old_shares
-                        base_cost = old_cost if old_cost > 0 else close_price
+                        base_cost = old_cost if old_cost != 0 else close_price
                         cost_price = ((old_shares * base_cost) + (add_shares * close_price)) / max(shares, 1)
                     else:
                         # 建仓或其他情况
@@ -784,7 +781,7 @@ def _apply_operations_to_table(
                         if old_shares <= 0 or operation == "建仓":
                             cost_price = close_price
                         else:
-                            cost_price = old_cost if old_cost > 0 else close_price
+                            cost_price = old_cost if old_cost != 0 else close_price
         else:
             shares = 0 if ts_code else "-"
             amount = 0.0
@@ -796,7 +793,7 @@ def _apply_operations_to_table(
             amount = _to_float(old.get("市值 (元)"), 0.0)
             actual_w = old_w
             shares = old.get("持仓股数", "-")
-            cost_price = old_cost if old_cost > 0 else None
+            cost_price = old_cost if old_cost != 0 else None
 
         if operation == "清仓":
             shares = 0 if ts_code else "-"

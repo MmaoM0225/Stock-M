@@ -509,13 +509,15 @@ def main(show_plot: bool = True, strategy_name: str = "2025_7d_for_once", output
     if output_path:
         final_output_path = Path(output_path)
     else:
-        # 默认文件名包含策略名称，避免不同版本覆盖
+        # 默认保存到 data/visualization，避免与脚本目录混杂
         safe_strategy_name = strategy_name.replace(".", "_")
-        final_output_path = script_dir / f"portfolio_{safe_strategy_name}_chart.png"
+        final_output_path = data_dir / "visualization" / f"portfolio_{safe_strategy_name}_chart.png"
+    final_output_path.parent.mkdir(parents=True, exist_ok=True)
     
     plot_combined_chart(
         dates_nav, nav_values, sh_nav,
-        dates_position, stock_positions, cash_positions, total_capitals,
+        dates_position, stock_positions, cash_positions,
+        total_capitals,
         metrics, str(final_output_path), show_plot=show_plot,
         hs300_nav=hs300_nav, strategy_name=strategy_name
     )

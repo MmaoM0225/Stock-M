@@ -22,6 +22,14 @@ _STOCK_SCREENER_ARTIFACT_ROOT = Path("data") / "artifacts" / "analyst" / "stock_
 _STOCK_POOL_MANAGER_ARTIFACT_ROOT = Path("data") / "artifacts" / "manager" / "stock_pool_manager"
 
 
+def _get_stock_pool_manager_root(state: Dict[str, Any]) -> Path:
+    """支持通过 state 传入 stock_pool_manager_root 覆盖默认路径。"""
+    root = state.get("stock_pool_manager_root")
+    if root:
+        return Path(str(root))
+    return _STOCK_POOL_MANAGER_ARTIFACT_ROOT
+
+
 def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
@@ -279,10 +287,11 @@ def create_persist_stock_pool_manager_node():
         if not payload:
             return state
 
+        artifact_root = _get_stock_pool_manager_root(state)
         trade_date = str(
             payload.get("trade_date") or state.get("trade_date") or datetime.now().strftime("%Y%m%d")
         ).replace("-", "")[:8]
-        artifact_dir = _STOCK_POOL_MANAGER_ARTIFACT_ROOT / trade_date
+        artifact_dir = artifact_root / trade_date
         result_path = artifact_dir / "result.json"
         manifest_path = artifact_dir / "manifest.json"
 

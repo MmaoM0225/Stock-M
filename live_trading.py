@@ -78,7 +78,7 @@ SECTOR_MANAGER_ROOT = Path("data/artifacts/manager/sector_manager")
 STOCK_POOL_MANAGER_ROOT = Path("data/artifacts/manager/stock_pool_manager")
 MACRO_MANAGER_ROOT = Path("data/artifacts/manager/macro_manager")
 STOCK_SCREENER_ROOT = Path("data/artifacts/analyst/stock_analyst/stock_screener")
-PORTFOLIO_DECISION_ROOT = Path("data/artifacts/decision/overall_ver1.8/portfolio")
+PORTFOLIO_DECISION_ROOT = Path("data/artifacts/decision/overall_ver2.0/portfolio")
 
 DEFAULT_INITIAL_CAPITAL = 1000000.0
 
@@ -148,7 +148,12 @@ def run_stock_pool_manager(
     logger.info(f"[{trade_date}] 开始运行 Stock Pool Manager...")
     graph = create_stock_pool_manager_graph(llm=llm)
     start = time.perf_counter()
-    result = graph.invoke({"trade_date": trade_date})
+    result = graph.invoke(
+        {
+            "trade_date": trade_date,
+            "stock_pool_manager_root": str(STOCK_POOL_MANAGER_ROOT),
+        }
+    )
     elapsed = time.perf_counter() - start
     logger.info(f"[{trade_date}] Stock Pool Manager 完成，耗时 {elapsed:.2f} 秒")
     return result
@@ -214,6 +219,7 @@ def run_portfolio_decision(
         "initial_capital": initial_capital,
         # 传入自定义存储路径
         "portfolio_decision_root": str(PORTFOLIO_DECISION_ROOT),
+        "stock_pool_manager_root": str(STOCK_POOL_MANAGER_ROOT),
     }
 
     if portfolio_holdings:

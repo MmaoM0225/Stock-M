@@ -5,7 +5,8 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
-DEFAULT_PORTFOLIO_VERSION = "daily_ver1.4"
+DEFAULT_PORTFOLIO_VERSION = "daily_full_position_ver1"
+HOME_PORTFOLIO_VERSIONS = ("daily_full_position_ver1", "daily_ver1.4")
 
 
 class HomeService:
@@ -36,7 +37,7 @@ class HomeService:
             },
             {
                 "agent": "组合决策（Portfolio Decision）",
-                "relative_dir": "decision/202401-202604_7d_for_once_ver1.3/portfolio",
+                "relative_dir": f"decision/{DEFAULT_PORTFOLIO_VERSION}/portfolio",
                 "to": "/data/portfolio",
             },
             {
@@ -72,24 +73,40 @@ class HomeService:
         return {"page": page, "page_size": page_size, "total": total, "items": items[start:end]}
 
     def get_portfolio_summary(self) -> Dict[str, Any]:
-        dates = self._list_overall_portfolio_dates()
+        dates = self._list_overall_portfolio_dates(DEFAULT_PORTFOLIO_VERSION)
         if not dates:
             raise FileNotFoundError(
                 f"no portfolio result found in {DEFAULT_PORTFOLIO_VERSION}"
             )
 
         latest_date = dates[-1]
-        latest_payload = self._load_json(self._overall_portfolio_dir / latest_date / "result.json")
+        latest_payload = self._load_json(
+            self._get_portfolio_dir(DEFAULT_PORTFOLIO_VERSION) / latest_date / "result.json"
+        )
 
         top_positions = self._extract_top_positions(latest_payload, top_n=5)
-        monthly_returns = self._extract_recent_returns(dates, recent_n=5)
-        metrics = self._extract_performance_metrics(dates)
+        monthly_returns = self._extract_recent_returns(DEFAULT_PORTFOLIO_VERSION, dates, recent_n=5)
+        metrics = self._extract_performance_metrics(DEFAULT_PORTFOLIO_VERSION, dates)
 
         return {
             "top_positions": top_positions,
             "monthly_returns": monthly_returns,
             "metrics": metrics,
         }
+
+    def get_home_portfolio_summaries(self) -> Dict[str, Any]:
+        summaries: Dict[str, Any] = {}
+        missing_versions: List[str] = []
+        for version in HOME_PORTFOLIO_VERSIONS:
+            try:
+                summaries[version] = self._build_portfolio_summary(version)
+            except FileNotFoundError:
+                missing_versions.append(version)
+        if not summaries:
+            raise FileNotFoundError(
+                f"no portfolio result found in {', '.join(HOME_PORTFOLIO_VERSIONS)}"
+            )
+        return {"summaries": summaries, "missing_versions": missing_versions}
 
     def _build_agent_item(self, source: Dict[str, str]) -> Optional[Dict[str, Any]]:
         base_dir = self.artifacts_root / source["relative_dir"]
@@ -111,11 +128,31 @@ class HomeService:
             item["signal"] = signal
         return item
 
-    def _list_overall_portfolio_dates(self) -> List[str]:
-        if not self._overall_portfolio_dir.exists():
+    def _build_portfolio_summary(self, portfolio_version: str) -> Dict[str, Any]:
+        dates = self._list_overall_portfolio_dates(portfolio_version)
+        if not dates:
+            raise FileNotFoundError(f"no portfolio result found in {portfolio_version}")
+        latest_date = dates[-1]
+        latest_payload = self._load_json(
+            self._get_portfolio_dir(portfolio_version) / latest_date / "result.json"
+        )
+        return {
+            "version": portfolio_version,
+            "latest_date": latest_date,
+            "top_positions": self._extract_top_positions(latest_payload, top_n=5),
+            "monthly_returns": self._extract_recent_returns(portfolio_version, dates, recent_n=5),
+            "metrics": self._extract_performance_metrics(portfolio_version, dates),
+        }
+
+    def _get_portfolio_dir(self, portfolio_version: str) -> Path:
+        return self.artifacts_root / "decision" / portfolio_version / "portfolio"
+
+    def _list_overall_portfolio_dates(self, portfolio_version: str) -> List[str]:
+        portfolio_dir = self._get_portfolio_dir(portfolio_version)
+        if not portfolio_dir.exists():
             return []
         dates: List[str] = []
-        for child in self._overall_portfolio_dir.iterdir():
+        for child in portfolio_dir.iterdir():
             if child.is_dir() and child.name.isdigit() and len(child.name) == 8:
                 if (child / "result.json").exists():
                     dates.append(child.name)
@@ -146,14 +183,17 @@ class HomeService:
                 break
         return result
 
-    def _extract_recent_returns(self, dates: List[str], recent_n: int) -> List[Dict[str, Any]]:
+    def _extract_recent_returns(
+        self, portfolio_version: str, dates: List[str], recent_n: int
+    ) -> List[Dict[str, Any]]:
         picked_dates = dates[-recent_n:]
         if not picked_dates:
             return []
 
         capitals: List[float] = []
+        portfolio_dir = self._get_portfolio_dir(portfolio_version)
         for date in picked_dates:
-            payload = self._load_json(self._overall_portfolio_dir / date / "result.json")
+            payload = self._load_json(portfolio_dir / date / "result.json")
             total_capital = self._extract_total_capital(payload)
             capitals.append(total_capital)
 
@@ -166,10 +206,11 @@ class HomeService:
             result.append({"month": f"{date[4:6]}-{date[6:8]}", "value": round(value, 2)})
         return result
 
-    def _extract_performance_metrics(self, dates: List[str]) -> Dict[str, float]:
+    def _extract_performance_metrics(self, portfolio_version: str, dates: List[str]) -> Dict[str, float]:
         capitals: List[float] = []
+        portfolio_dir = self._get_portfolio_dir(portfolio_version)
         for date in dates:
-            payload = self._load_json(self._overall_portfolio_dir / date / "result.json")
+            payload = self._load_json(portfolio_dir / date / "result.json")
             capitals.append(self._extract_total_capital(payload))
 
         if not capitals:
