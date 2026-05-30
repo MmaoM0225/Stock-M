@@ -275,7 +275,7 @@ JSON 结构（focus_industry_sectors / focus_concept_sectors 必须从下方对�
 {{
   "market_regime": "从当日 macro_economy/market_sentiment/news 等综合得出的状态",
   "market_direction": "neutral | bullish | bearish",
-  "target_position": "建议仓位区间，如 20%-40%、50%-70%、80%-100% 等具体百分比范围",
+  "target_position": "建议仓位区间，可从以下档位中根据当日数据智能选择，格式如'30%-45%'或'50%-65%'：\n       极端看空：0%-10%\n       谨慎：10%-25%、20%-35%\n       中性偏谨慎：25%-45%、30%-50%\n       中性：40%-60%、45%-65%\n       中性偏积极：50%-70%、55%-75%\n       积极：65%-85%、70%-90%\n       极度乐观：85%-100%",
   "focus_industry_sectors": ["从 industry_list 中选取的行业名"],
   "focus_concept_sectors": ["从 ths_concept_list 中选取的概念名"],
   "avoid_sectors": ["从当日数据提炼的规避板块"],

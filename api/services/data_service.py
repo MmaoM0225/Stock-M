@@ -34,6 +34,7 @@ DEFAULT_COMMODITY_META: List[Dict[str, str]] = [
     {"name": "沪铝连续", "code": "ALL.SHF", "source": "fut"},
     {"name": "棉花连续", "code": "CFL.ZCE", "source": "fut"},
 ]
+DEFAULT_PORTFOLIO_VERSION = "daily_full_position_ver1"
 
 class DataService:
     def __init__(self, db: Session, project_root: Optional[Path] = None):
@@ -293,8 +294,16 @@ class DataService:
             raise FileNotFoundError("decision version directory not found")
         return versions[-1]
 
+    def _default_portfolio_version(self) -> str:
+        versions = self.list_portfolio_versions()
+        if DEFAULT_PORTFOLIO_VERSION in versions:
+            return DEFAULT_PORTFOLIO_VERSION
+        if versions:
+            return versions[0]
+        raise FileNotFoundError("decision version directory not found")
+
     def get_portfolio_result(self, trade_date: str) -> Dict[str, Any]:
-        version = self._latest_decision_version()
+        version = self._default_portfolio_version()
         rows = (
             self.db.query(PortfolioDecisionKey)
             .filter(PortfolioDecisionKey.trade_date == trade_date)
@@ -740,6 +749,24 @@ class DataService:
             "company": company,
             "fetch_status": fetch_status,
             "reduce_result": reduce_result,
+            "company_basic_analysis": raw.get("company_basic_analysis")
+            if isinstance(raw.get("company_basic_analysis"), dict)
+            else {},
+            "valuation_map_analysis": raw.get("valuation_map_analysis")
+            if isinstance(raw.get("valuation_map_analysis"), dict)
+            else {},
+            "income_map_analysis": raw.get("income_map_analysis")
+            if isinstance(raw.get("income_map_analysis"), dict)
+            else {},
+            "cashflow_map_analysis": raw.get("cashflow_map_analysis")
+            if isinstance(raw.get("cashflow_map_analysis"), dict)
+            else {},
+            "balancesheet_map_analysis": raw.get("balancesheet_map_analysis")
+            if isinstance(raw.get("balancesheet_map_analysis"), dict)
+            else {},
+            "dividend_map_analysis": raw.get("dividend_map_analysis")
+            if isinstance(raw.get("dividend_map_analysis"), dict)
+            else {},
             "valuation_trend": valuation_trend,
             "income_trend": income_trend,
             "cashflow_trend": cashflow_trend,
@@ -2100,8 +2127,8 @@ class DataService:
         return result
 
     def list_portfolio_dates(self) -> List[str]:
-        latest_version = self._latest_decision_version()
-        return sorted(self.list_portfolio_dates_by_version(latest_version))
+        default_version = self._default_portfolio_version()
+        return sorted(self.list_portfolio_dates_by_version(default_version))
 
     def get_latest_portfolio(self) -> Dict[str, Any]:
         dates = self.list_portfolio_dates()
@@ -2167,7 +2194,7 @@ class DataService:
 
     def get_portfolio_dates_api(self, version: Optional[str] = None) -> Dict[str, Any]:
         dates = sorted(self._list_portfolio_dates_for_version(version), reverse=True)
-        return {"dates": [self._format_trade_date(d) for d in dates]}
+        return {"dates": dates}
 
     def get_portfolio_snapshot_api(self, trade_date: str, version: Optional[str] = None) -> Dict[str, Any]:
         normalized_date = self._normalize_trade_date(trade_date)

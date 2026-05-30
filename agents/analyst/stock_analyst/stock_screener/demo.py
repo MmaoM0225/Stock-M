@@ -58,15 +58,25 @@ def main():
     args = parser.parse_args()
 
     # 初始化 LLM
-    try:
-        validate_config()
-        llm_config = get_llm_config()
-        llm = ChatOpenAI(**llm_config)
-        print("LLM 配置成功，将使用 AI 决策板块模板")
-    except Exception as e:
-        print(f"LLM 配置失败: {e}")
-        print("将使用默认平衡模板（无 LLM）")
+    llm_config = get_llm_config()
+    if not validate_config(llm_config):
+        print("LLM 配置无效，将使用默认平衡模板（无 LLM）")
         llm = None
+    else:
+        try:
+            llm = ChatOpenAI(
+                base_url=llm_config.base_url,
+                api_key=llm_config.api_key,
+                model=llm_config.model,
+                temperature=llm_config.temperature,
+                max_retries=llm_config.max_retries,
+                timeout=llm_config.timeout,
+            )
+            print(f"LLM 配置成功: {llm_config.provider}/{llm_config.model}")
+        except Exception as e:
+            print(f"LLM 初始化失败: {e}")
+            print("将使用默认平衡模板（无 LLM）")
+            llm = None
 
     target_date = _parse_trade_date(args.date) if args.date else None
     trade_date = _resolve_trade_date(target_date)
@@ -82,7 +92,7 @@ def main():
         "trade_date": trade_date,
         "min_market_cap": 80e8,  # 统一底线约束；具体板块可被模板细化
         "exclude_st": True,
-        "max_stocks": 12,
+        "max_stocks": 18
         # "max_price": 800,  # 股价上限预留字段，暂不使用
     }
 

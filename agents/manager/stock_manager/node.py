@@ -225,7 +225,7 @@ _STOCK_MANAGER_SUMMARY_DEFAULT: Dict[str, Any] = {
         "fundamental": None,
         "technical": None,
     },
-    "action_signal": "watch",
+    "action_signal": "hold",
     "signal_reason": "",
     "key_points": [],
     "risks": [],
@@ -265,17 +265,14 @@ def create_stock_summary_node(llm):
             else:
                 score = round(0.6 * fs + 0.4 * ts, 1)
             if score is None:
-                action_signal = "watch"
-                signal_reason = "评分缺失，建议先观察。"
+                action_signal = "hold"
+                signal_reason = "评分缺失，暂保持现有持仓。"
             elif score >= 75:
                 action_signal = "buy"
                 signal_reason = "综合评分较高，且风险可控。"
-            elif score >= 60:
-                action_signal = "hold"
-                signal_reason = "综合评分中上，趋势与基本面尚可。"
             elif score >= 45:
-                action_signal = "watch"
-                signal_reason = "综合评分一般，建议继续跟踪等待确认。"
+                action_signal = "hold"
+                signal_reason = "综合评分尚可，继续持有观察。"
             else:
                 action_signal = "sell"
                 signal_reason = "综合评分偏低，风险收益比不占优。"
@@ -323,7 +320,7 @@ def create_stock_summary_node(llm):
 - selection_reason（一句话）
 - risk_level（低|中|高）
 - component_scores（对象，含 fundamental/technical）
-- action_signal（buy|hold|sell|watch）
+- action_signal（buy|hold|sell）
 - signal_reason（一句话，解释信号）
 - key_points（字符串数组，3-6条）
 - risks（字符串数组，1-5条）
@@ -367,7 +364,7 @@ def create_stock_summary_node(llm):
                 "fundamental": component.get("fundamental", fa.get("overall_score")),
                 "technical": component.get("technical", ta.get("technical_score")),
             },
-            "action_signal": data.get("action_signal") or "watch",
+            "action_signal": data.get("action_signal") or "hold",
             "signal_reason": data.get("signal_reason") or "",
             "key_points": data.get("key_points") or [],
             "risks": data.get("risks") or [],

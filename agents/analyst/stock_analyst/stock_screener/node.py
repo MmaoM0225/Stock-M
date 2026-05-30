@@ -22,6 +22,7 @@ _STOCK_SCREENER_ARTIFACT_ROOT = Path("data") / "artifacts" / "analyst" / "stock_
 
 _SECTOR_TEMPLATE_LIBRARY: Dict[str, Dict[str, Any]] = {
     "value_defensive": {
+        "description": "价值投资防守型。适用：大盘蓝筹、银行、公用事业、高股息板块。特征：低PE(<18)、低PB(<2.5)、高股息率排序。适合熊市或避险环境。",
         "min_market_cap": 150e8,
         "max_pe": 18.0,
         "max_pb": 2.5,
@@ -29,6 +30,7 @@ _SECTOR_TEMPLATE_LIBRARY: Dict[str, Dict[str, Any]] = {
         "sort_order": "desc",
     },
     "quality_growth": {
+        "description": "优质成长股。适用：盈利稳定的消费、医药、制造业龙头。特征：中等PE(<45)、PB<8、按PE排序。适合震荡市寻找被低估的成长股。",
         "min_market_cap": 80e8,
         "max_pe": 45.0,
         "max_pb": 8.0,
@@ -36,6 +38,7 @@ _SECTOR_TEMPLATE_LIBRARY: Dict[str, Dict[str, Any]] = {
         "sort_order": "asc",
     },
     "cyclical_rebound": {
+        "description": "周期股反弹。适用：有色、化工、机械、建材等周期行业。特征：PE<30、低PB(<3.5)优先。适合经济底部、周期复苏预期阶段。",
         "min_market_cap": 60e8,
         "max_pe": 30.0,
         "max_pb": 3.5,
@@ -43,13 +46,29 @@ _SECTOR_TEMPLATE_LIBRARY: Dict[str, Dict[str, Any]] = {
         "sort_order": "asc",
     },
     "theme_momentum": {
-        "min_market_cap": 40e8,
-        "max_pe": 100.0,
-        "max_pb": 15.0,
+        "description": "主题动量炒作。适用：AI、元宇宙、新能源等热点概念炒作。特征：不看PE/PB估值，只看量比/换手率。适合热点爆发、资金追逐的强趋势行情。",
+        "min_market_cap": 50e8,
+        "max_pe": 300.0,
+        "max_pb": 30.0,
         "sort_by": "volume_ratio",
         "sort_order": "desc",
     },
+    "growth_no_profit": {
+        "description": "亏损但高成长。适用：生物医药、早期AI、创新药、未盈利科技股。特征：不限制PE(允许亏损/高PE)、按PS(市销率)排序选营收增长好的。适合高风险偏好的成长股投资。",
+        "min_market_cap": 80e8,
+        "max_pb": 25.0,
+        "sort_by": "ps",
+        "sort_order": "asc",
+    },
+    "light_asset_quality": {
+        "description": "轻资产优质股。适用：软件、SaaS、服务平台、互联网等高PB轻资产公司。特征：PB可达30、按PS排序。适合估值高但资产质量好的科技公司。",
+        "min_market_cap": 80e8,
+        "max_pb": 30.0,
+        "sort_by": "ps",
+        "sort_order": "asc",
+    },
     "fallback_balanced": {
+        "description": "平衡兜底模板。适用：不确定板块属性时使用。特征：参数中庸，按市值排序。当板块特征不明确时的默认选择。",
         "min_market_cap": 70e8,
         "max_pe": 60.0,
         "max_pb": 10.0,
@@ -634,19 +653,38 @@ def create_select_sector_templates_node(llm: Optional[Any] = None):
                 [
                     (
                         "system",
-                        "你是A股选股筛选模板决策助手。"
-                        "你只能从给定模板库中为每个板块选择 template_id，并给出少量 overrides。"
-                        "严禁输出模板库外的 template_id。"
-                        "overrides 仅允许字段：min_market_cap,max_market_cap,min_pe,max_pe,min_pb,max_pb,sort_by,sort_order。"
-                        "如果把握不高，confidence 应低于0.45，系统会回退默认类比。"
+                        "你是A股选股筛选模板决策助手。\n"
+                        "你的任务：为每个板块从模板库中选择最合适的 template_id。\n\n"
+                        "【模板选择指南】\n"
+                        "1. 仔细阅读模板库中每个模板的 'description' 字段，了解其适用场景\n"
+                        "2. 根据板块名称特征，匹配最贴切的模板\n"
+                        "3. 结合交易日期的季节/时间背景（如冬季的冰雪产业、夏季的空调/电力、春节前的消费，世界杯期间的体育）\n"
+                        "4. 结合宏观环境和市场情绪，判断当前适合价值防守还是成长进攻\n\n"
+                        "【关键规则】\n"
+                        "- 只能输出模板库中存在的 template_id，严禁自创\n"
+                        "- overrides 仅允许：min_market_cap,max_market_cap,min_pe,max_pe,min_pb,max_pb,sort_by,sort_order\n"
+                        "- 高确定性时 confidence>0.6，不确定时 confidence<0.45（会触发兜底）\n\n"
+                        "【模板匹配参考】\n"
+                        "- 银行/公用事业/高股息板块 → value_defensive\n"
+                        "- 消费/医药龙头 → quality_growth\n"
+                        "- 有色/化工/机械/建材 → cyclical_rebound\n"
+                        "- AI/元宇宙/热点概念 → theme_momentum\n"
+                        "- 生物医药/早期科技/创新药 → growth_no_profit\n"
+                        "- 软件/SaaS/服务平台 → light_asset_quality\n\n"
+                        "【时间敏感板块示例】\n"
+                        "- 1-2月（冬季）：冰雪产业、滑雪、取暖设备、煤炭→考虑theme_momentum\n"
+                        "- 6-8月（夏季）：电力、空调、制冷、旅游→考虑theme_momentum\n"
+                        "- 春节前：消费、白酒、礼品、交运→考虑theme_momentum或quality_growth\n"
+                        "- 政策发布期：相关主题板块→考虑theme_momentum"
                     ),
                     (
                         "human",
+                        "交易日：{trade_date}\n"
                         "板块列表：{sectors}\n"
-                        "模板库：{template_library}\n"
+                        "模板库（含描述）：{template_library}\n"
                         "宏观环境：{macro_env}\n"
-                        "市场情绪：{market_sentiment}\n"
-                        "请输出结构化 decisions。",
+                        "市场情绪：{market_sentiment}\n\n"
+                        "请为每个板块选择最合适的模板，输出结构化 decisions。",
                     ),
                 ]
             )
@@ -654,6 +692,7 @@ def create_select_sector_templates_node(llm: Optional[Any] = None):
             chain = prompt | structured_llm
             result = chain.invoke(
                 {
+                    "trade_date": str(state.get("trade_date") or ""),
                     "sectors": ", ".join(sectors),
                     "template_library": json.dumps(_SECTOR_TEMPLATE_LIBRARY, ensure_ascii=False),
                     "macro_env": json.dumps(macro_env, ensure_ascii=False),

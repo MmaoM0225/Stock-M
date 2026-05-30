@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import hashlib
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -51,6 +52,78 @@ def _build_fundamental_result_path(ts_code: str, trade_date: str) -> Path:
 def _build_fundamental_manifest_path(ts_code: str, trade_date: str) -> Path:
     """构建基本面分析师 manifest 文件路径。"""
     return _FUNDAMENTAL_ANALYST_ARTIFACT_ROOT / ts_code / trade_date / "manifest.json"
+
+
+def _build_node_result_path(ts_code: str, trade_date: str, node_name: str) -> Path:
+    """构建某个分析节点在当次请求下的结果路径（与总 result.json 同级）。"""
+    return _FUNDAMENTAL_ANALYST_ARTIFACT_ROOT / ts_code / trade_date / f"{node_name}_result.json"
+
+
+def _json_hash(payload: Dict[str, Any]) -> str:
+    """对输入 payload 做稳定 JSON 哈希。"""
+    body = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def _read_node_output_from_result_file(path: Path, node_name: str, ts_code: str) -> Optional[Dict[str, Any]]:
+    if not path.exists():
+        return None
+    try:
+        data = _load_json_file(path) or {}
+        out = data.get("output")
+        if isinstance(out, dict):
+            return out
+    except Exception as e:
+        logger.warning("读取节点缓存失败 node=%s ts_code=%s path=%s: %s", node_name, ts_code, path, e)
+    return None
+
+
+def _load_node_output_from_cache(
+    ts_code: str,
+    node_name: str,
+    cache_key: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """仅使用现有 *_result.json 作为缓存载体，按 cache_key 匹配复用。"""
+    if not cache_key:
+        return None
+    ts_dir = _FUNDAMENTAL_ANALYST_ARTIFACT_ROOT / ts_code
+    if not ts_dir.exists():
+        return None
+    pattern = f"*/{node_name}_result.json"
+    result_files = sorted(ts_dir.glob(pattern), reverse=True)
+    for path in result_files:
+        try:
+            data = _load_json_file(path) or {}
+        except Exception:
+            continue
+        if str(data.get("cache_key") or "") != cache_key:
+            continue
+        out = data.get("output")
+        if isinstance(out, dict):
+            return out
+    return None
+
+
+def _persist_node_result(
+    ts_code: str,
+    trade_date: str,
+    node_name: str,
+    cache_key: Optional[str],
+    output: Dict[str, Any],
+    persist_request_file: bool = True,
+) -> None:
+    """写入当次请求节点结果文件（作为唯一缓存载体）。"""
+    payload = {
+        "node_name": node_name,
+        "ts_code": ts_code,
+        "trade_date": trade_date,
+        "cache_key": cache_key,
+        "created_at": datetime.now().astimezone().isoformat(),
+        "output": output,
+    }
+    req_path = _build_node_result_path(ts_code, trade_date, node_name)
+    if persist_request_file:
+        _write_json_atomic(req_path, payload)
 
 
 def _norm_date(s: Optional[str]) -> str:
@@ -484,6 +557,9 @@ def create_stock_fundamental_analysis_node():
         cashflow_rows: List[Dict[str, Any]] = list(state.get("stock_cashflow_data") or [])
         bs_rows: List[Dict[str, Any]] = list(state.get("stock_balancesheet_data") or [])
         div_rows: List[Dict[str, Any]] = list(state.get("stock_dividend_data") or [])
+        trade_date = _norm_date(meta.get("trade_date") or state.get("trade_date"))
+        if not trade_date:
+            trade_date = datetime.now().strftime("%Y%m%d")
 
         latest_daily = _latest_daily(daily_rows)
         valuation_snapshot = {
@@ -777,11 +853,32 @@ def create_stock_fundamental_analysis_node():
             "dividend_snapshot": facts["dividend_snapshot"],
             "summary": "已完成公司基础信息与估值快照汇总，可供后续专题节点分析。",
         }
-
-        return {
+        output = {
             "stock_fundamental_facts": facts,
             "fundamental_base_profile": base_profile,
         }
+        if ts_code:
+            cache_input = {
+                "ts_code": ts_code,
+                "trade_date": trade_date,
+                "stock_fundamental_meta": meta,
+                "stock_company_info": company_info,
+                "stock_fundamental_daily": daily_rows,
+                "stock_income_data": income_rows,
+                "stock_cashflow_data": cashflow_rows,
+                "stock_balancesheet_data": bs_rows,
+                "stock_dividend_data": div_rows,
+            }
+            cache_key = _json_hash(cache_input)
+            _persist_node_result(
+                ts_code=ts_code,
+                trade_date=trade_date,
+                node_name="stock_fundamental_analysis",
+                cache_key=cache_key,
+                output=output,
+                persist_request_file=False,
+            )
+        return output
 
     return stock_fundamental_analysis_node
 
@@ -795,11 +892,15 @@ def create_company_basic_insight_node(llm):
     ) -> Dict[str, Any]:
         facts = state.get("stock_fundamental_facts")
         meta = state.get("stock_fundamental_meta") or {}
+        ts_code = (meta.get("ts_code") or state.get("ts_code") or "").strip()
+        trade_date = _norm_date(meta.get("trade_date") or state.get("trade_date"))
+        if not trade_date:
+            trade_date = datetime.now().strftime("%Y%m%d")
         if not facts or not isinstance(facts, dict):
             return {
                 "company_profile_text": "",
                 "company_basic_analysis": {
-                    "ts_code": meta.get("ts_code") or state.get("ts_code"),
+                    "ts_code": ts_code,
                     "error": "无有效基础事实数据",
                 }
             }
@@ -814,6 +915,26 @@ def create_company_basic_insight_node(llm):
             ensure_ascii=False,
             indent=2,
         )
+        cache_input = {
+            "ts_code": ts_code,
+            "company_profile": facts.get("company_profile") or {},
+        }
+        cache_key = _json_hash(cache_input)
+        if ts_code:
+            cached_output = _load_node_output_from_cache(
+                ts_code,
+                "company_basic_insight",
+                cache_key,
+            )
+            if cached_output:
+                _persist_node_result(
+                    ts_code,
+                    trade_date,
+                    "company_basic_insight",
+                    cache_key,
+                    cached_output,
+                )
+                return cached_output
 
         system_msg = """你是A股公司资料整理助手。请把输入的公司基础字段（stock_company）整理成一段可供下游分析复用的中文描述。
 要求：
@@ -846,10 +967,19 @@ def create_company_basic_insight_node(llm):
             "company_profile_text": data.get("company_profile_text") or "",
             "key_facts": data.get("key_facts") or [],
         }
-        return {
+        output = {
             "company_profile_text": out["company_profile_text"],
             "company_basic_analysis": out,
         }
+        if ts_code:
+            _persist_node_result(
+                ts_code,
+                trade_date,
+                "company_basic_insight",
+                cache_key,
+                output,
+            )
+        return output
 
     return company_basic_insight_node
 
@@ -863,6 +993,9 @@ def create_valuation_map_node(llm):
     ) -> Dict[str, Any]:
         facts = state.get("stock_fundamental_facts") or {}
         ts_code = facts.get("ts_code") or state.get("ts_code")
+        trade_date = _norm_date(facts.get("trade_date") or state.get("trade_date"))
+        if not trade_date:
+            trade_date = datetime.now().strftime("%Y%m%d")
         valuation_snapshot = facts.get("valuation_snapshot") or {}
         profile_text = (state.get("company_profile_text") or "").strip()
 
@@ -873,6 +1006,24 @@ def create_valuation_map_node(llm):
                     "error": "无估值快照数据",
                 }
             }
+        cache_input = {
+            "ts_code": ts_code,
+            "valuation_snapshot": valuation_snapshot,
+        }
+        cache_key = _json_hash(cache_input)
+        if ts_code:
+            cached_output = _load_node_output_from_cache(
+                ts_code, "valuation_map", cache_key
+            )
+            if cached_output:
+                _persist_node_result(
+                    ts_code,
+                    trade_date,
+                    "valuation_map",
+                    cache_key,
+                    cached_output,
+                )
+                return cached_output
 
         from langchain_core.prompts import ChatPromptTemplate
 
@@ -932,7 +1083,16 @@ def create_valuation_map_node(llm):
             "data_gaps": data.get("data_gaps") or [],
             "summary": data.get("summary") or "",
         }
-        return {"valuation_map_analysis": out}
+        output = {"valuation_map_analysis": out}
+        if ts_code:
+            _persist_node_result(
+                ts_code,
+                trade_date,
+                "valuation_map",
+                cache_key,
+                output,
+            )
+        return output
 
     return valuation_map_node
 
@@ -946,6 +1106,9 @@ def create_income_map_node(llm):
     ) -> Dict[str, Any]:
         facts = state.get("stock_fundamental_facts") or {}
         ts_code = facts.get("ts_code") or state.get("ts_code")
+        trade_date = _norm_date(facts.get("trade_date") or state.get("trade_date"))
+        if not trade_date:
+            trade_date = datetime.now().strftime("%Y%m%d")
         income_snapshot = facts.get("income_snapshot") or {}
         profile_text = (state.get("company_profile_text") or "").strip()
 
@@ -956,6 +1119,24 @@ def create_income_map_node(llm):
                     "error": "无利润表快照数据",
                 }
             }
+        cache_input = {
+            "ts_code": ts_code,
+            "income_snapshot": income_snapshot,
+        }
+        cache_key = _json_hash(cache_input)
+        if ts_code:
+            cached_output = _load_node_output_from_cache(
+                ts_code, "income_map", cache_key
+            )
+            if cached_output:
+                _persist_node_result(
+                    ts_code,
+                    trade_date,
+                    "income_map",
+                    cache_key,
+                    cached_output,
+                )
+                return cached_output
 
         from langchain_core.prompts import ChatPromptTemplate
 
@@ -1003,7 +1184,16 @@ def create_income_map_node(llm):
             "risks": data.get("risks") or [],
             "summary": data.get("summary") or "",
         }
-        return {"income_map_analysis": out}
+        output = {"income_map_analysis": out}
+        if ts_code:
+            _persist_node_result(
+                ts_code,
+                trade_date,
+                "income_map",
+                cache_key,
+                output,
+            )
+        return output
 
     return income_map_node
 
@@ -1017,6 +1207,9 @@ def create_cashflow_map_node(llm):
     ) -> Dict[str, Any]:
         facts = state.get("stock_fundamental_facts") or {}
         ts_code = facts.get("ts_code") or state.get("ts_code")
+        trade_date = _norm_date(facts.get("trade_date") or state.get("trade_date"))
+        if not trade_date:
+            trade_date = datetime.now().strftime("%Y%m%d")
         cashflow_snapshot = facts.get("cashflow_snapshot") or {}
         profile_text = (state.get("company_profile_text") or "").strip()
 
@@ -1027,6 +1220,24 @@ def create_cashflow_map_node(llm):
                     "error": "无现金流快照数据",
                 }
             }
+        cache_input = {
+            "ts_code": ts_code,
+            "cashflow_snapshot": cashflow_snapshot,
+        }
+        cache_key = _json_hash(cache_input)
+        if ts_code:
+            cached_output = _load_node_output_from_cache(
+                ts_code, "cashflow_map", cache_key
+            )
+            if cached_output:
+                _persist_node_result(
+                    ts_code,
+                    trade_date,
+                    "cashflow_map",
+                    cache_key,
+                    cached_output,
+                )
+                return cached_output
 
         from langchain_core.prompts import ChatPromptTemplate
 
@@ -1074,7 +1285,16 @@ def create_cashflow_map_node(llm):
             "risks": data.get("risks") or [],
             "summary": data.get("summary") or "",
         }
-        return {"cashflow_map_analysis": out}
+        output = {"cashflow_map_analysis": out}
+        if ts_code:
+            _persist_node_result(
+                ts_code,
+                trade_date,
+                "cashflow_map",
+                cache_key,
+                output,
+            )
+        return output
 
     return cashflow_map_node
 
@@ -1088,6 +1308,9 @@ def create_balancesheet_map_node(llm):
     ) -> Dict[str, Any]:
         facts = state.get("stock_fundamental_facts") or {}
         ts_code = facts.get("ts_code") or state.get("ts_code")
+        trade_date = _norm_date(facts.get("trade_date") or state.get("trade_date"))
+        if not trade_date:
+            trade_date = datetime.now().strftime("%Y%m%d")
         bs_snapshot = facts.get("balancesheet_snapshot") or {}
         profile_text = (state.get("company_profile_text") or "").strip()
 
@@ -1098,6 +1321,24 @@ def create_balancesheet_map_node(llm):
                     "error": "无资产负债表快照数据",
                 }
             }
+        cache_input = {
+            "ts_code": ts_code,
+            "balancesheet_snapshot": bs_snapshot,
+        }
+        cache_key = _json_hash(cache_input)
+        if ts_code:
+            cached_output = _load_node_output_from_cache(
+                ts_code, "balancesheet_map", cache_key
+            )
+            if cached_output:
+                _persist_node_result(
+                    ts_code,
+                    trade_date,
+                    "balancesheet_map",
+                    cache_key,
+                    cached_output,
+                )
+                return cached_output
 
         from langchain_core.prompts import ChatPromptTemplate
 
@@ -1145,7 +1386,16 @@ def create_balancesheet_map_node(llm):
             "risks": data.get("risks") or [],
             "summary": data.get("summary") or "",
         }
-        return {"balancesheet_map_analysis": out}
+        output = {"balancesheet_map_analysis": out}
+        if ts_code:
+            _persist_node_result(
+                ts_code,
+                trade_date,
+                "balancesheet_map",
+                cache_key,
+                output,
+            )
+        return output
 
     return balancesheet_map_node
 
@@ -1159,6 +1409,9 @@ def create_dividend_map_node(llm):
     ) -> Dict[str, Any]:
         facts = state.get("stock_fundamental_facts") or {}
         ts_code = facts.get("ts_code") or state.get("ts_code")
+        trade_date = _norm_date(facts.get("trade_date") or state.get("trade_date"))
+        if not trade_date:
+            trade_date = datetime.now().strftime("%Y%m%d")
         div_snapshot = facts.get("dividend_snapshot") or {}
         profile_text = (state.get("company_profile_text") or "").strip()
 
@@ -1169,6 +1422,24 @@ def create_dividend_map_node(llm):
                     "error": "无分红送股快照数据",
                 }
             }
+        cache_input = {
+            "ts_code": ts_code,
+            "dividend_snapshot": div_snapshot,
+        }
+        cache_key = _json_hash(cache_input)
+        if ts_code:
+            cached_output = _load_node_output_from_cache(
+                ts_code, "dividend_map", cache_key
+            )
+            if cached_output:
+                _persist_node_result(
+                    ts_code,
+                    trade_date,
+                    "dividend_map",
+                    cache_key,
+                    cached_output,
+                )
+                return cached_output
 
         from langchain_core.prompts import ChatPromptTemplate
 
@@ -1216,7 +1487,16 @@ def create_dividend_map_node(llm):
             "risks": data.get("risks") or [],
             "summary": data.get("summary") or "",
         }
-        return {"dividend_map_analysis": out}
+        output = {"dividend_map_analysis": out}
+        if ts_code:
+            _persist_node_result(
+                ts_code,
+                trade_date,
+                "dividend_map",
+                cache_key,
+                output,
+            )
+        return output
 
     return dividend_map_node
 
@@ -1230,6 +1510,9 @@ def create_fundamental_reduce_node(llm):
     ) -> Dict[str, Any]:
         facts = state.get("stock_fundamental_facts") or {}
         ts_code = facts.get("ts_code") or state.get("ts_code")
+        trade_date = _norm_date(facts.get("trade_date") or state.get("trade_date"))
+        if not trade_date:
+            trade_date = datetime.now().strftime("%Y%m%d")
 
         payload = {
             "ts_code": ts_code,
@@ -1240,6 +1523,20 @@ def create_fundamental_reduce_node(llm):
             "balancesheet_map_analysis": state.get("balancesheet_map_analysis") or {},
             "dividend_map_analysis": state.get("dividend_map_analysis") or {},
         }
+        cache_key = _json_hash(payload)
+        if ts_code:
+            cached_output = _load_node_output_from_cache(
+                ts_code, "fundamental_reduce", cache_key
+            )
+            if cached_output:
+                _persist_node_result(
+                    ts_code,
+                    trade_date,
+                    "fundamental_reduce",
+                    cache_key,
+                    cached_output,
+                )
+                return cached_output
 
         # 任何一个 map 出错时，reduce 仍尽量给结论，但标注数据缺失
         from langchain_core.prompts import ChatPromptTemplate
@@ -1307,7 +1604,16 @@ def create_fundamental_reduce_node(llm):
             "next_data_needed": data.get("next_data_needed") or [],
             "summary": data.get("summary") or "",
         }
-        return {"fundamental_reduce_result": out}
+        output = {"fundamental_reduce_result": out}
+        if ts_code:
+            _persist_node_result(
+                ts_code,
+                trade_date,
+                "fundamental_reduce",
+                cache_key,
+                output,
+            )
+        return output
 
     return fundamental_reduce_node
 

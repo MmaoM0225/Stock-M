@@ -1375,6 +1375,28 @@ _SECTOR_TREND_INSIGHT_DEFAULT = {
     "market_regime": "mixed",
 }
 
+
+def _split_sector_names(text: Any) -> List[str]:
+    normalized = str(text or "").replace("／", "/").strip()
+    if not normalized:
+        return []
+    return [x.strip() for x in normalized.split("/") if x and x.strip()]
+
+
+def _normalize_sector_name_list(items: Any) -> List[str]:
+    out: List[str] = []
+    seen = set()
+    if not isinstance(items, list):
+        return out
+    for item in items:
+        for name in _split_sector_names(item):
+            if name in seen:
+                continue
+            seen.add(name)
+            out.append(name)
+    return out
+
+
 _TREND_PAYLOAD_FIELD_DOC = """【轻量榜单字段说明】
 - 通用字段：name、score、rank、phase、momentum_5d、momentum_20d、momentum_60d、risk_level
 - trend_strength_top：趋势强度领先方向，优先看 phase 与 5d/20d/60d 动量是否共振
@@ -1542,6 +1564,7 @@ def create_sector_trend_insight_node(llm):
   "highlights": ["关键要点"],
   "market_regime": "trend_following | rotation | repair | risk_off | mixed"
 }}}}
+板块名称必须逐条独立输出，禁止把相似板块合并为单条字符串（例如禁止“自然景点/旅游及酒店”，应拆成“自然景点”“旅游及酒店”）。
 若无明显规律，market_regime 填 mixed。"""
 
         human_msg = """【榜单轻量摘要】
@@ -1561,6 +1584,9 @@ def create_sector_trend_insight_node(llm):
         data = extract_json_text(raw)
         for k, v in _SECTOR_TREND_INSIGHT_DEFAULT.items():
             data.setdefault(k, v)
+        data["leading_themes"] = _normalize_sector_name_list(data.get("leading_themes"))
+        data["reversal_opportunities"] = _normalize_sector_name_list(data.get("reversal_opportunities"))
+        data["top_risk_sectors"] = _normalize_sector_name_list(data.get("top_risk_sectors"))
         return {"sector_trend_insight": data}
 
     return _insight_node

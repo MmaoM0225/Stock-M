@@ -23,3 +23,11 @@ def get_portfolio_summary(service: HomeService = Depends(get_home_service)) -> A
         return APIResponse(data=service.get_portfolio_summary())
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/portfolio/summaries", response_model=APIResponse)
+def get_portfolio_summaries(service: HomeService = Depends(get_home_service)) -> APIResponse:
+    try:
+        return APIResponse(data=service.get_home_portfolio_summaries())
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))

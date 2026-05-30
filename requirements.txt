@@ -1,47 +1,36 @@
 # 数据获取相关
-tushare>=1.2.89
-akshare>=1.1.0
-yfinance>=0.2.0
-pandas>=1.5.0
-numpy>=1.21.0
-aiohttp>=3.8.0
-requests>=2.28.0
-beautifulsoup4>=4.11.0
-lxml>=4.9.0
+tushare==1.4.24
+akshare==1.18.32
+pandas==2.3.3
+numpy==2.3.4
+aiohttp==3.13.2
+requests==2.32.5
+beautifulsoup4==4.14.2
+lxml==6.0.2
 
 # 全球金融新闻 API
-finlight-client>=0.1.0
-
-# 数据处理
-ta-lib>=0.4.25
-scikit-learn>=1.1.0
-
+finlight-client==2.2.1
 
 # 日志和配置
-python-dotenv>=0.19.0
+python-dotenv==1.2.1
 
 # 数据库
-sqlalchemy>=2.0.0
+sqlalchemy==2.0.48
 
 # LangChain 和 LangGraph
-langchain>=0.3.0
-langchain-core>=0.3.0
-langchain-openai>=0.2.0
-langgraph>=0.2.0
-langgraph-checkpoint>=2.0.0
+langchain==1.2.10
+langchain-core==1.2.17
+langchain-openai==1.1.10
+langgraph==1.0.10
+langgraph-checkpoint==4.0.1
 
 # 数据验证
-pydantic>=2.0.0
-
-# 开发和测试
-pytest>=7.0.0
-pytest-asyncio>=0.21.0
+pydantic==2.12.5
 
 # 可视化
-matplotlib>=3.7.0
-numpy>=1.24.0
+matplotlib==3.10.8
 
 # Web API
-fastapi>=0.100.0
-uvicorn[standard]>=0.23.0
-python-multipart>=0.0.6
+fastapi==0.136.0
+uvicorn[standard]==0.44.0
+python-multipart==0.0.26

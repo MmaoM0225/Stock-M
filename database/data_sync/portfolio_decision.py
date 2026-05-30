@@ -224,6 +224,29 @@ def _upsert_one(session, result_path: Path) -> bool:
     return True
 
 
+def _cleanup_missing_records(session) -> int:
+    """清理数据库中已无对应 result.json 文件的记录。"""
+    removed = 0
+    rows = session.query(PortfolioDecisionKey).all()
+    for row in rows:
+        run_id = _safe_text(row.run_id) or ""
+        # 仅处理本同步脚本管理的数据，避免误删其他业务记录。
+        if not run_id.startswith("portfolio_decision:"):
+            continue
+
+        rel_path = _safe_text(row.result_path)
+        if not rel_path:
+            session.delete(row)
+            removed += 1
+            continue
+
+        abs_result_path = PROJECT_ROOT / rel_path
+        if not abs_result_path.exists():
+            session.delete(row)
+            removed += 1
+    return removed
+
+
 def sync_single_result(result_path: Path) -> bool:
     """同步单个 result.json 到数据库（主表字段）。"""
     abs_path = result_path if result_path.is_absolute() else (PROJECT_ROOT / result_path)
@@ -255,6 +278,7 @@ def sync_portfolio_decision() -> int:
         return 0
 
     success = 0
+    removed = 0
     with get_db_session() as session:
         for result_path in result_files:
             try:
@@ -262,8 +286,11 @@ def sync_portfolio_decision() -> int:
                 success += 1
             except Exception as e:
                 logger.warning("同步失败 %s: %s", result_path.as_posix(), e)
+        removed = _cleanup_missing_records(session)
 
     logger.info("同步完成，共写入/更新 %s 条", success)
+    if removed:
+        logger.info("已清理缺失文件对应的数据库记录 %s 条", removed)
     return success
 
 
